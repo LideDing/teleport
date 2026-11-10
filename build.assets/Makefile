@@ -29,6 +29,40 @@ include arch.mk
 include images.mk
 include grpcbox.mk # Requires images.mk
 
+# ---------------------------------------------------------------------------
+# Mirror configuration for docker builds and docker runs.
+#
+# Base images come from AWS ECR Public (see the Dockerfiles), all package
+# downloads from the Tencent software mirrors. Override any of these on the
+# make command line, or pass extra docker build args via MIRROR_BUILD_ARGS.
+# ---------------------------------------------------------------------------
+# MIRROR_* is intentionally prefixed: variables named exactly like GOPROXY or
+# PIP_INDEX_URL would be silently overridden by whatever the host exports.
+MIRROR_BASE ?= https://mirrors.tencent.com
+MIRROR_GOPROXY ?= $(MIRROR_BASE)/go,direct
+# No trailing slash: Corepack appends /<pkg>/latest itself and would produce //.
+MIRROR_NPM_REGISTRY ?= $(MIRROR_BASE)/npm
+MIRROR_PIP_INDEX_URL ?= $(MIRROR_BASE)/pypi/simple/
+MIRROR_RUSTUP_DIST_SERVER ?= $(MIRROR_BASE)/rustup
+MIRROR_RUSTUP_UPDATE_ROOT ?= $(MIRROR_BASE)/rustup/rustup
+# Tencent mirrors neither github.com nor the devtoolset-12 RPMs. Point these at
+# an internal mirror if one is available; empty means the upstream URL is used.
+GIT_MIRROR ?=
+DEVTOOLSET_REPO_BASE ?= https://buildlogs.centos.org
+# go1.26.7 -> 1.26.7, which is the ECR Public golang image tag.
+GO_IMAGE ?= public.ecr.aws/docker/library/golang:$(patsubst go%,%,$(GOLANG_VERSION))
+MIRROR_BUILD_ARGS ?=
+
+# The ENV baked into the images already carries these values; passing them here
+# also covers `docker run` targets and makes them overridable from `make`.
+DOCKERFLAGS := $(DOCKERFLAGS) \
+	-e GOPROXY=$(MIRROR_GOPROXY) \
+	-e npm_config_registry=$(MIRROR_NPM_REGISTRY) \
+	-e COREPACK_NPM_REGISTRY=$(MIRROR_NPM_REGISTRY) \
+	-e PIP_INDEX_URL=$(MIRROR_PIP_INDEX_URL) \
+	-e RUSTUP_DIST_SERVER=$(MIRROR_RUSTUP_DIST_SERVER) \
+	-e RUSTUP_UPDATE_ROOT=$(MIRROR_RUSTUP_UPDATE_ROOT)
+
 DOCSBOX=ghcr.io/gravitational/docs
 
 ifneq ("$(KUBECONFIG)","")
@@ -115,6 +149,7 @@ build-binaries-fips: buildbox-centos7 webassets
 buildbox-thirdparty:
 	$(call LOG_GROUP_START)
 	docker buildx build \
+		$(MIRROR_BUILD_ARGS) \
 		--cache-from $(BUILDBOX_THIRDPARTY) \
 		--cache-to type=inline \
 		$(if $(PUSH),--push,--load) \
@@ -134,6 +169,7 @@ buildbox-thirdparty:
 buildbox-thirdparty-stage:
 	$(call LOG_GROUP_START)
 	docker buildx build \
+		$(MIRROR_BUILD_ARGS) \
 		--load \
 		--tag buildbox-thirdparty-$(STAGE):$(BUILDBOX_VERSION) \
 		-f buildbox/Dockerfile-thirdparty \
@@ -161,7 +197,9 @@ buildbox-thirdparty-libs: buildbox-thirdparty-stage
 buildbox-ng:
 	$(call LOG_GROUP_START)
 	docker buildx build \
+		$(MIRROR_BUILD_ARGS) \
 		--build-arg THIRDPARTY_IMAGE=$(BUILDBOX_THIRDPARTY) \
+		--build-arg GO_IMAGE=$(GO_IMAGE) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
 		--build-arg RUST_VERSION=$(RUST_VERSION) \
 		--build-arg NODE_VERSION=$(NODE_VERSION) \
@@ -183,11 +221,16 @@ buildbox-ng:
 buildbox:
 	$(call LOG_GROUP_START)
 	docker buildx build \
+		$(MIRROR_BUILD_ARGS) \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
 		--build-arg BUILDARCH=$(RUNTIME_ARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
 		--build-arg GOLANGCI_LINT_VERSION=$(GOLANGCI_LINT_VERSION) \
+		--build-arg GO_IMAGE=$(GO_IMAGE) \
+		--build-arg GIT_MIRROR=$(GIT_MIRROR) \
+		--build-arg GOPROXY_URL=$(MIRROR_GOPROXY) \
+		--build-arg NPM_REGISTRY=$(MIRROR_NPM_REGISTRY) \
 		--build-arg RUST_VERSION=$(RUST_VERSION) \
 		--build-arg WASM_OPT_VERSION=$(WASM_OPT_VERSION) \
 		--build-arg WASM_BINDGEN_VERSION=$(WASM_BINDGEN_VERSION) \
@@ -224,10 +267,14 @@ buildbox-centos7:
 	$(call LOG_GROUP_START)
 	$(REQUIRE_HOST_ARCH)
 	docker buildx build \
+		$(MIRROR_BUILD_ARGS) \
 		--target buildbox \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
 		--build-arg BUILDBOX_CENTOS7_ASSETS=$(BUILDBOX_CENTOS7_ASSETS) \
+		--build-arg GO_IMAGE=$(GO_IMAGE) \
+		--build-arg GIT_MIRROR=$(GIT_MIRROR) \
+		--build-arg DEVTOOLSET_REPO_BASE=$(DEVTOOLSET_REPO_BASE) \
 		--build-arg BUILDARCH=$(HOST_ARCH) \
 		--build-arg TARGETARCH=$(RUNTIME_ARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
@@ -251,10 +298,14 @@ buildbox-centos7:
 buildbox-centos7-fips:
 	$(call LOG_GROUP_START)
 	docker buildx build \
+		$(MIRROR_BUILD_ARGS) \
 		--target buildbox-fips \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
 		--build-arg BUILDBOX_CENTOS7_ASSETS=$(BUILDBOX_CENTOS7_ASSETS) \
+		--build-arg GO_IMAGE=$(GO_IMAGE) \
+		--build-arg GIT_MIRROR=$(GIT_MIRROR) \
+		--build-arg DEVTOOLSET_REPO_BASE=$(DEVTOOLSET_REPO_BASE) \
 		--build-arg BUILDARCH=$(HOST_ARCH) \
 		--build-arg TARGETARCH=$(RUNTIME_ARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
@@ -277,10 +328,12 @@ buildbox-centos7-fips:
 buildbox-arm:
 	$(call LOG_GROUP_START)
 	docker buildx build \
+		$(MIRROR_BUILD_ARGS) \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
 		--build-arg BUILDARCH=$(RUNTIME_ARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
+		--build-arg GO_IMAGE=$(GO_IMAGE) \
 		--build-arg NODE_VERSION=$(NODE_VERSION) \
 		--build-arg RUST_VERSION=$(RUST_VERSION) \
 		--cache-to type=inline \
@@ -302,10 +355,12 @@ endif
 buildbox-node:
 	$(call LOG_GROUP_START)
 	docker buildx build \
+		$(MIRROR_BUILD_ARGS) \
 		--build-arg BUILDARCH=$(RUNTIME_ARCH) \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
 		--build-arg NODE_VERSION=$(NODE_VERSION) \
+		--build-arg NPM_REGISTRY=$(MIRROR_NPM_REGISTRY) \
 		--build-arg RUST_VERSION=$(RUST_VERSION) \
 		--build-arg WASM_OPT_VERSION=$(WASM_OPT_VERSION) \
 		--build-arg WASM_BINDGEN_VERSION=$(WASM_BINDGEN_VERSION) \
@@ -363,6 +418,8 @@ fix-imports: buildbox
 .PHONY: bpf-bytecode
 bpf-bytecode:
 	docker build \
+		$(MIRROR_BUILD_ARGS) \
+		--build-arg GO_IMAGE=$(GO_IMAGE) \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
 		--build-arg BUILDARCH=$(RUNTIME_ARCH) \
@@ -794,8 +851,11 @@ print-buildbox-version:
 .PHONY: build-centos7-assets
 build-centos7-assets:
 	docker buildx build \
+		$(MIRROR_BUILD_ARGS) \
 		--build-arg BUILDARCH=$(HOST_ARCH) \
 		--build-arg DEVTOOLSET=$(DEVTOOLSET) \
+		--build-arg GIT_MIRROR=$(GIT_MIRROR) \
+		--build-arg DEVTOOLSET_REPO_BASE=$(DEVTOOLSET_REPO_BASE) \
 		--build-arg TARGETARCH=$(RUNTIME_ARCH) \
 		--cache-to type=inline \
 		--cache-from $(BUILDBOX_CENTOS7_ASSETS) \

@@ -1,5 +1,11 @@
 # syntax=docker/dockerfile:1
 
+# Base images come from AWS ECR Public (Docker Official Images namespace).
+# The Go toolchain is copied from the ECR Public Go image: the Tencent mirror
+# proxies Go modules but does not host the go.dev release tarballs.
+ARG GO_IMAGE=public.ecr.aws/docker/library/golang:1.26.7
+FROM ${GO_IMAGE} AS golang-toolchain
+
 ###################################################################################
 #                                                                                 #
 #      DO NOT USE FOR PRODUCTION BUILD OR ANYTHING OTHER THAN CI TESTING!         #
@@ -18,7 +24,26 @@
 ## LIBFIDO2 ###################################################################
 
 # Build libfido2 separately for isolation, speed and flexibility.
-FROM buildpack-deps:22.04 AS libfido2
+FROM public.ecr.aws/docker/library/buildpack-deps:22.04 AS libfido2
+
+# Tencent does not mirror github.com; GIT_MIRROR can point clones at an
+# internal git mirror prefix (with a trailing slash).
+ARG GIT_MIRROR=
+RUN if [ -n "${GIT_MIRROR}" ]; then \
+        git config --global url."${GIT_MIRROR}".insteadOf "https://github.com/"; \
+    fi
+
+# Point every apt source at the Tencent mirror.
+RUN set -eu; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+          -e 's|https\?://deb.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://archive.ubuntu.com|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.ubuntu.com|https://mirrors.tencent.com|g' \
+          "$f"; \
+    done
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends cmake && \
@@ -86,17 +111,43 @@ RUN git clone --depth=1 https://github.com/Yubico/libfido2.git -b 1.15.0 && \
 # 4. Fast, language-dependent dependencies
 # 5. Multi-stage layer copies
 
-FROM ubuntu:22.04 AS buildbox
+FROM public.ecr.aws/docker/library/ubuntu:22.04 AS buildbox
 
 COPY locale.gen /etc/locale.gen
 COPY profile /etc/profile
 COPY gpg/docker.gpg .
 COPY gpg/hashicorp.gpg .
+
+# All language package managers resolve through the Tencent mirrors.
+ARG NPM_REGISTRY=https://mirrors.tencent.com/npm
+ARG GOPROXY_URL=https://mirrors.tencent.com/go,direct
+ARG GIT_MIRROR=
 ENV LANGUAGE="en_US.UTF-8" \
     LANG="en_US.UTF-8" \
     LC_ALL="en_US.UTF-8" \
     LC_CTYPE="en_US.UTF-8" \
-    DEBIAN_FRONTEND="noninteractive"
+    DEBIAN_FRONTEND="noninteractive" \
+    GOPROXY=${GOPROXY_URL} \
+    npm_config_registry=${NPM_REGISTRY} \
+    COREPACK_NPM_REGISTRY=${NPM_REGISTRY} \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple/ \
+    RUSTUP_DIST_SERVER=https://mirrors.tencent.com/rustup \
+    RUSTUP_UPDATE_ROOT=https://mirrors.tencent.com/rustup/rustup
+
+# Point every apt source at the Tencent mirror, and the Docker CE repo too.
+# Ubuntu PPAs and the HashiCorp apt repo have no Tencent equivalent and are
+# left as-is.
+RUN set -eu; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+          -e 's|https\?://deb.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://archive.ubuntu.com|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.ubuntu.com|https://mirrors.tencent.com|g' \
+          "$f"; \
+    done
 
 # BUILDARCH and TARGETARCH are automatically set by Docker when building the
 # image with BuildKit. See:
@@ -157,7 +208,7 @@ RUN apt-get -y update && \
     gpg --dearmor -o /etc/apt/keyrings/docker.gpg docker.gpg && \
     chmod a+r /etc/apt/keyrings/docker.gpg && \
     echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.tencent.com/docker-ce/linux/ubuntu \
     "$(. /etc/os-release && echo "$VERSION_CODENAME")" stable" | \
     tee /etc/apt/sources.list.d/docker.list > /dev/null && \
     apt-get update && \
@@ -170,6 +221,12 @@ RUN apt-get -y update && \
     dpkg-reconfigure locales && \
     apt-get -y clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Tencent does not mirror github.com. GIT_MIRROR can point all clones at an
+# internal git mirror prefix (with a trailing slash).
+RUN if [ -n "${GIT_MIRROR}" ]; then \
+        git config --global url."${GIT_MIRROR}".insteadOf "https://github.com/"; \
+    fi
 
 # Install osslsigncode for Windows Code Signing. The format of our
 # Code Signing Certificate needs us to use osslsigncode >= 2.6, which
@@ -190,7 +247,8 @@ RUN groupadd ci --gid=$GID -o && \
     useradd ci --uid=$UID --gid=$GID --create-home --shell=/bin/sh && \
     mkdir -p -m0700 /var/lib/teleport && chown -R ci /var/lib/teleport
 
-# Install Rust.
+# Install Rust. rustup-init and all toolchain tarballs come from the Tencent
+# rustup mirror; crates.io has no Tencent equivalent and is left as-is.
 ARG RUST_VERSION
 ENV RUSTUP_HOME=/usr/local/rustup \
      CARGO_HOME=/usr/local/cargo \
@@ -203,7 +261,15 @@ RUN mkdir -p $RUSTUP_HOME && chmod a+w $RUSTUP_HOME && \
 # Cross-compilation targets are only installed on amd64, as
 # this image doesn't contain gcc-multilib.
 USER ci
-RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain $RUST_VERSION && \
+RUN case "$BUILDARCH" in \
+        amd64) RUSTUP_TARGET=x86_64-unknown-linux-gnu ;; \
+        arm64) RUSTUP_TARGET=aarch64-unknown-linux-gnu ;; \
+        *) echo "unsupported BUILDARCH: $BUILDARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "${RUSTUP_UPDATE_ROOT}/dist/${RUSTUP_TARGET}/rustup-init" -o /tmp/rustup-init && \
+    chmod +x /tmp/rustup-init && \
+    /tmp/rustup-init -y --profile minimal --default-toolchain "$RUST_VERSION" && \
+    rm -f /tmp/rustup-init && \
     rustup --version && \
     cargo --version && \
     rustc --version && \
@@ -225,19 +291,21 @@ ARG NODE_VERSION
 ENV NODE_PATH="/usr/local/lib/nodejs-linux"
 ENV PATH="$PATH:${NODE_PATH}/bin"
 RUN export NODE_ARCH=$(if [ "$BUILDARCH" = "amd64" ]; then echo "x64"; else echo "arm64"; fi) && \
-    export NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
+    export NODE_URL="https://mirrors.tencent.com/nodejs-release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
     mkdir -p ${NODE_PATH} && \
     curl -o /tmp/nodejs.tar.xz -fsSL ${NODE_URL} && \
     tar -xJf /tmp/nodejs.tar.xz -C /usr/local/lib/nodejs-linux --strip-components=1
 RUN corepack enable yarn pnpm
 
-# Install Go.
+# Install Go from the ECR Public Go image. go.dev/dl is not mirrored by Tencent;
+# Go modules are served by the Tencent GOPROXY set above.
 ARG GOLANG_VERSION
-RUN mkdir -p /opt && cd /opt && curl -fsSL https://go.dev/dl/$GOLANG_VERSION.linux-${BUILDARCH}.tar.gz | tar xz && \
-    mkdir -p /go/src/github.com/gravitational/teleport && \
+COPY --from=golang-toolchain /usr/local/go /opt/go
+RUN mkdir -p /go/src/github.com/gravitational/teleport && \
     chmod a+w /go && \
     chmod a+w /var/lib && \
-    chmod a-w /
+    chmod a-w / && \
+    /opt/go/bin/go version
 ENV GOPATH="/go" \
     GOROOT="/opt/go" \
     PATH="$PATH:/opt/go/bin:/go/bin:/go/src/github.com/gravitational/teleport/build"

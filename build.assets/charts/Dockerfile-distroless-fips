@@ -1,11 +1,20 @@
 ARG BASE_IMAGE=gcr.io/distroless/cc-debian12
 
-FROM debian:12 AS staging
-RUN apt-get update
+FROM public.ecr.aws/docker/library/debian:12 AS staging
+# Point every apt source at the Tencent mirror.
+RUN set -eu; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+          -e 's|https\?://deb.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.debian.org|https://mirrors.tencent.com|g' \
+          "$f"; \
+    done && \
+    apt-get update
 COPY fetch-debs ./
 RUN ./fetch-debs dumb-init libpam0g libaudit1 libcap-ng0
 
-FROM debian:12 AS teleport
+FROM public.ecr.aws/docker/library/debian:12 AS teleport
 # Install the teleport binary from an architecture-specific debian package. Note
 # that we cannot simply pass a ready-made package filename in as a build-arg, as
 # this dockerfile is used for a multiarch build and any build-args will be

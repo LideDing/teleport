@@ -15,13 +15,36 @@
 # Pin the tag to Debian Bullseye to make sure the glibc compatibility
 # (glibc version of Bullseye is 2.31).
 ARG NODE_VERSION
-FROM node:${NODE_VERSION}-bullseye AS buildbox
+FROM public.ecr.aws/docker/library/node:${NODE_VERSION}-bullseye AS buildbox
 
 # BUILDARCH is automatically set by DOCKER when building the image with Build Kit (MacOS by deafult).
 # https://docs.docker.com/engine/reference/builder/#automatic-platform-args-in-the-global-scope
 ARG BUILDARCH
 
+# npm, pnpm and Corepack all resolve packages through the Tencent npm mirror.
+ARG NPM_REGISTRY=https://mirrors.tencent.com/npm
+ENV npm_config_registry=${NPM_REGISTRY} \
+    COREPACK_NPM_REGISTRY=${NPM_REGISTRY} \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
 RUN corepack enable pnpm
+
+# Point every apt source (one-line and deb822 format) at the Tencent mirror.
+# Debian 11 is EOL: the bullseye-security indices still list packages whose
+# pool files were removed from deb.debian.org and its mirrors, so the frozen
+# archive.debian.org must serve the security suite. The security-specific
+# rules must come before the generic deb.debian.org one.
+RUN set -eu; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+          -e 's|https\?://deb.debian.org/debian-security|https://archive.debian.org/debian-security|g' \
+          -e 's|https\?://security.debian.org|https://archive.debian.org|g' \
+          -e 's|https\?://deb.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://archive.ubuntu.com|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.ubuntu.com|https://mirrors.tencent.com|g' \
+          "$f"; \
+    done
 
 COPY locale.gen /etc/locale.gen
 COPY profile /etc/profile
@@ -32,8 +55,8 @@ ENV LANGUAGE="en_US.UTF-8" \
     DEBIAN_FRONTEND="noninteractive"
 
 # Install packages.
-RUN apt-get -y update && \
-    apt-get install -q -y --no-install-recommends \
+RUN apt-get -y -o Acquire::Retries=5 update && \
+    apt-get install -q -y -o Acquire::Retries=5 --no-install-recommends \
     build-essential \
     ca-certificates \
     clang \
@@ -70,12 +93,22 @@ ARG RUST_VERSION
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH \
-    RUST_VERSION=$RUST_VERSION
+    RUST_VERSION=$RUST_VERSION \
+    RUSTUP_DIST_SERVER=https://mirrors.tencent.com/rustup \
+    RUSTUP_UPDATE_ROOT=https://mirrors.tencent.com/rustup/rustup
 RUN mkdir -p $RUSTUP_HOME && chmod a+w $RUSTUP_HOME && \
     mkdir -p $CARGO_HOME/registry && chmod -R a+w $CARGO_HOME
 
 USER ci
-RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain $RUST_VERSION && \
+RUN case "$BUILDARCH" in \
+        amd64) RUSTUP_TARGET=x86_64-unknown-linux-gnu ;; \
+        arm64) RUSTUP_TARGET=aarch64-unknown-linux-gnu ;; \
+        *) echo "unsupported BUILDARCH: $BUILDARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "${RUSTUP_UPDATE_ROOT}/dist/${RUSTUP_TARGET}/rustup-init" -o /tmp/rustup-init && \
+    chmod +x /tmp/rustup-init && \
+    /tmp/rustup-init -y --profile minimal --default-toolchain "$RUST_VERSION" && \
+    rm -f /tmp/rustup-init && \
     rustup --version && \
     cargo --version && \
     rustc --version && \

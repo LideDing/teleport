@@ -4,7 +4,19 @@
 # TODO(hugoShaka): cleanup the Makefile docker/image targets and remove this file.
 
 # Stage to build the image, without FIPS entrypoint argument
-FROM ubuntu:20.04 AS teleport
+FROM public.ecr.aws/docker/library/ubuntu:20.04 AS teleport
+
+# Point every apt source at the Tencent mirror.
+RUN set -eu; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+          -e 's|https\?://deb.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://archive.ubuntu.com|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.ubuntu.com|https://mirrors.tencent.com|g' \
+          "$f"; \
+    done
 
 # Install dumb-init and ca-certificates. The dumb-init package is to ensure
 # signals and orphaned processes are handled correctly. The ca-certificates

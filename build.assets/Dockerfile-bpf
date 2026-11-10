@@ -3,17 +3,36 @@
 # Minimal container for generating BPF bytecode
 # This Dockerfile is used to generate BPF bytecode used
 # by enhanced recording.
-FROM docker.io/library/debian:12
+
+# Go toolchain comes from ECR Public: the Tencent mirror proxies Go modules,
+# not go.dev release tarballs.
+ARG GO_IMAGE=public.ecr.aws/docker/library/golang:1.26.7
+FROM ${GO_IMAGE} AS golang-toolchain
+
+FROM public.ecr.aws/docker/library/debian:12
 
 ENV LANGUAGE="en_US.UTF-8" \
     LANG="en_US.UTF-8" \
     LC_ALL="en_US.UTF-8" \
     LC_CTYPE="en_US.UTF-8" \
-    DEBIAN_FRONTEND="noninteractive"
+    DEBIAN_FRONTEND="noninteractive" \
+    GOPROXY=https://mirrors.tencent.com/go,direct
 
 # BUILDARCH is automatically set by DOCKER when building the image with Build Kit (MacOS by default).
 # https://docs.docker.com/engine/reference/builder/#automatic-platform-args-in-the-global-scope
 ARG BUILDARCH
+
+# Point every apt source at the Tencent mirror.
+RUN set -eu; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+          -e 's|https\?://deb.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://archive.ubuntu.com|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.ubuntu.com|https://mirrors.tencent.com|g' \
+          "$f"; \
+    done
 
 RUN apt -y update && \
     apt install -q -y --no-install-recommends \
@@ -26,15 +45,14 @@ RUN apt -y update && \
     apt -y clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Go.
+# Install Go from the ECR Public Go image.
 ARG GOLANG_VERSION
-RUN mkdir -p /opt && \
-    cd /opt && \
-    curl -fsSL "https://go.dev/dl/$GOLANG_VERSION.linux-$BUILDARCH.tar.gz" | tar xz && \
-    mkdir -p /go/src/github.com/gravitational/teleport && \
+COPY --from=golang-toolchain /usr/local/go /opt/go
+RUN mkdir -p /go/src/github.com/gravitational/teleport && \
     chmod a+w /go && \
     chmod a+w /var/lib && \
-    chmod a-w /
+    chmod a-w / && \
+    /opt/go/bin/go version
 ENV GOPATH="/go" \
     GOROOT="/opt/go" \
     PATH="$PATH:/opt/go/bin:/go/bin:/go/src/github.com/gravitational/teleport/build"

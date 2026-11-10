@@ -1,12 +1,17 @@
 # syntax=docker/dockerfile:1
 
+# Go toolchain comes from ECR Public: the Tencent mirror proxies Go modules,
+# not go.dev release tarballs.
+ARG GO_IMAGE=public.ecr.aws/docker/library/golang:1.26.7
+FROM ${GO_IMAGE} AS golang-toolchain
+
 # This Dockerfile is used to build Teleport on ARM (32-bit) only.
 # The binaries produced need to be able to run on all the linux
 # distributions we support. See https://goteleport.com/docs/installation/
 # The binaries also run in the OCI containers we produce,
 # both "heavy" and distroless.
 #
-FROM docker.io/library/debian:11
+FROM public.ecr.aws/docker/library/debian:11
 
 COPY locale.gen /etc/locale.gen
 COPY profile /etc/profile
@@ -20,6 +25,28 @@ ENV LANGUAGE="en_US.UTF-8" \
 # BUILDARCH is automatically set by DOCKER when building the image with Build Kit (MacOS by default).
 # https://docs.docker.com/engine/reference/builder/#automatic-platform-args-in-the-global-scope
 ARG BUILDARCH
+
+ARG NPM_REGISTRY=https://mirrors.tencent.com/npm
+ENV npm_config_registry=${NPM_REGISTRY} \
+    COREPACK_NPM_REGISTRY=${NPM_REGISTRY} \
+    GOPROXY=https://mirrors.tencent.com/go,direct \
+    RUSTUP_DIST_SERVER=https://mirrors.tencent.com/rustup \
+    RUSTUP_UPDATE_ROOT=https://mirrors.tencent.com/rustup/rustup
+
+# Point every apt source at the Tencent mirror. bullseye-security must come
+# from archive.debian.org (Debian 11 is EOL, pool files are gone from live
+# mirrors), so the security-specific rules run before the generic one.
+RUN set -eu; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+          -e 's|https\?://deb.debian.org/debian-security|https://archive.debian.org/debian-security|g' \
+          -e 's|https\?://security.debian.org|https://archive.debian.org|g' \
+          -e 's|https\?://deb.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://archive.ubuntu.com|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.ubuntu.com|https://mirrors.tencent.com|g' \
+          "$f"; \
+    done
 
 RUN apt-get -y update && \
     apt-get install -q -y --no-install-recommends \
@@ -51,7 +78,7 @@ ARG NODE_VERSION
 ENV NODE_PATH="/usr/local/lib/nodejs-linux"
 ENV PATH="$PATH:${NODE_PATH}/bin"
 RUN NODE_ARCH="$(if [ "$BUILDARCH" = 'amd64' ]; then echo 'x64'; else echo 'arm64'; fi)" && \
-    NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
+    NODE_URL="https://mirrors.tencent.com/nodejs-release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
     NODE_FILE="$(mktemp node-XXXXXX.tar.xz)" && \
     mkdir -p "$NODE_PATH" && \
     curl -o "$NODE_FILE" -fsSL "$NODE_URL" && \
@@ -59,15 +86,14 @@ RUN NODE_ARCH="$(if [ "$BUILDARCH" = 'amd64' ]; then echo 'x64'; else echo 'arm6
     rm -f "$NODE_FILE"
 RUN corepack enable yarn pnpm
 
-# Install Go.
+# Install Go from the ECR Public Go image.
 ARG GOLANG_VERSION
-RUN mkdir -p /opt && \
-    cd /opt && \
-    curl -fsSL "https://go.dev/dl/$GOLANG_VERSION.linux-$BUILDARCH.tar.gz" | tar xz && \
-    mkdir -p /go/src/github.com/gravitational/teleport && \
+COPY --from=golang-toolchain /usr/local/go /opt/go
+RUN mkdir -p /go/src/github.com/gravitational/teleport && \
     chmod a+w /go && \
     chmod a+w /var/lib && \
-    chmod a-w /
+    chmod a-w / && \
+    /opt/go/bin/go version
 ENV GOPATH="/go" \
     GOROOT="/opt/go" \
     PATH="$PATH:/opt/go/bin:/go/bin:/go/src/github.com/gravitational/teleport/build"
@@ -92,7 +118,15 @@ RUN mkdir -p $RUSTUP_HOME && chmod a+w $RUSTUP_HOME && \
 # Install Rust using the ci user, as that is the user that
 # will run builds using the Rust toolchains we install here.
 USER ci
-RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain $RUST_VERSION && \
+RUN case "$BUILDARCH" in \
+        amd64) RUSTUP_TARGET=x86_64-unknown-linux-gnu ;; \
+        arm64) RUSTUP_TARGET=aarch64-unknown-linux-gnu ;; \
+        *) echo "unsupported BUILDARCH: $BUILDARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "${RUSTUP_UPDATE_ROOT}/dist/${RUSTUP_TARGET}/rustup-init" -o /tmp/rustup-init && \
+    chmod +x /tmp/rustup-init && \
+    /tmp/rustup-init -y --profile minimal --default-toolchain "$RUST_VERSION" && \
+    rm -f /tmp/rustup-init && \
     rustup target add arm-unknown-linux-gnueabihf && \
     rustup --version && \
     cargo --version && \

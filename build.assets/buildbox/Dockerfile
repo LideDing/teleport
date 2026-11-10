@@ -22,8 +22,13 @@
 # /tmp/go/build. CARGO_HOME is /tmp/rust. This allows Go and Rust to run and
 # have a place to cache builds and install binaries.
 
-ARG BASE_IMAGE=ubuntu:22.04
+ARG BASE_IMAGE=public.ecr.aws/docker/library/ubuntu:22.04
 ARG THIRDPARTY_IMAGE
+ARG GO_IMAGE=public.ecr.aws/docker/library/golang:1.26.7
+
+# The Go toolchain comes from ECR Public. The Tencent mirror proxies Go modules
+# but does not host the go.dev release tarballs.
+FROM ${GO_IMAGE} AS golang-toolchain
 
 # ----------------------------------------------------------------------------
 # Define a simple base image for installing various compilers which are then
@@ -32,7 +37,27 @@ ARG THIRDPARTY_IMAGE
 
 FROM ${BASE_IMAGE} AS base
 
-# Install curl as it is needed by the Go and Rust stages to download the compilers.
+# All package managers in every stage resolve through the Tencent mirrors.
+ENV GOPROXY=https://mirrors.tencent.com/go,direct \
+    npm_config_registry=https://mirrors.tencent.com/npm \
+    COREPACK_NPM_REGISTRY=https://mirrors.tencent.com/npm \
+    PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple/ \
+    RUSTUP_DIST_SERVER=https://mirrors.tencent.com/rustup \
+    RUSTUP_UPDATE_ROOT=https://mirrors.tencent.com/rustup/rustup
+
+# Point every apt source at the Tencent mirror.
+RUN set -eu; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+          -e 's|https\?://deb.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://archive.ubuntu.com|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.ubuntu.com|https://mirrors.tencent.com|g' \
+          "$f"; \
+    done
+
+# Install curl as it is needed by the Rust stage to download the toolchain.
 RUN apt-get update \
     && apt-get install -y curl \
     && rm -rf /var/lib/apt/lists/*
@@ -62,16 +87,10 @@ FROM ${THIRDPARTY_IMAGE} AS thirdparty
 
 FROM base AS go
 
-RUN install -d -m 0775 -o buildbox -g buildbox /opt/go
-USER buildbox
-
 ARG BUILDARCH
 ARG GOLANG_VERSION
-# Set BUILDARCH if not set when not using buildkit. Only works for arm64 and amd64.
-RUN BUILDARCH=${BUILDARCH:-$(uname -m | sed 's/aarch64/arm64/g; s/x86_64/amd64/g')}; \
-	curl -fsSL https://go.dev/dl/${GOLANG_VERSION}.linux-${BUILDARCH}.tar.gz | \
-	tar -C /opt -xz && \
-	/opt/go/bin/go version
+COPY --chown=buildbox:buildbox --from=golang-toolchain /usr/local/go /opt/go
+RUN /opt/go/bin/go version
 
 # ----------------------------------------------------------------------------
 # Install Rust
@@ -88,8 +107,15 @@ USER buildbox
 ARG RUST_VERSION
 ENV RUSTUP_HOME=/opt/rust
 ENV CARGO_HOME=/opt/rust
-RUN curl --proto =https --tlsv1.2 -fsSL https://sh.rustup.rs | \
-	sh -s -- -y --profile minimal --default-toolchain ${RUST_VERSION} && \
+RUN case "$(uname -m)" in \
+		x86_64|amd64) RUSTUP_TARGET=x86_64-unknown-linux-gnu ;; \
+		aarch64|arm64) RUSTUP_TARGET=aarch64-unknown-linux-gnu ;; \
+		*) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+	esac; \
+	curl -fsSL "${RUSTUP_UPDATE_ROOT}/dist/${RUSTUP_TARGET}/rustup-init" -o /tmp/rustup-init && \
+	chmod +x /tmp/rustup-init && \
+	/tmp/rustup-init -y --profile minimal --default-toolchain "${RUST_VERSION}" && \
+	rm -f /tmp/rustup-init && \
 	${CARGO_HOME}/bin/rustup --version && \
 	${CARGO_HOME}/bin/cargo --version && \
 	${CARGO_HOME}/bin/rustc --version && \
@@ -119,7 +145,7 @@ RUN \
 		x86_64|amd64) NARCH=x64 ;; \
 		*) echo "Unsupported architecture for node: $(uname -m)" >&2; exit 1 ;; \
 	esac; \
-	curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NARCH}.tar.xz" | \
+	curl -fsSL "https://mirrors.tencent.com/nodejs-release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NARCH}.tar.xz" | \
 	tar -C /opt/node -xJ --strip-components=1 && \
 	/opt/node/bin/node --version
 RUN PATH=/opt/node/bin corepack enable yarn pnpm
@@ -191,7 +217,7 @@ RUN install -d -m 1777 -o teleport -g teleport /tmp/build
 # version.
 # TODO(camscale): Change build.assets/build-package.sh to use this FPM instead
 # of the docker image we produce.
-RUN gem install fpm
+RUN gem install fpm --source https://mirrors.tencent.com/rubygems/
 ENV USE_SYSTEM_FPM=true
 
 # The boring-rs build wants llvm-{ar,ranlib}-12 in /usr/bin. The

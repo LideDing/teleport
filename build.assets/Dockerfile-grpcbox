@@ -1,6 +1,24 @@
 # syntax=docker/dockerfile:1
 
-FROM docker.io/golang:1.26.7
+FROM public.ecr.aws/docker/library/golang:1.26.7
+
+# All package managers resolve through the Tencent mirrors.
+ARG NPM_REGISTRY=https://mirrors.tencent.com/npm
+ENV GOPROXY=https://mirrors.tencent.com/go,direct \
+    npm_config_registry=${NPM_REGISTRY} \
+    COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
+
+# Point every apt source at the Tencent mirror.
+RUN set -eu; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+          -e 's|https\?://deb.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.debian.org|https://mirrors.tencent.com|g' \
+          -e 's|https\?://archive.ubuntu.com|https://mirrors.tencent.com|g' \
+          -e 's|https\?://security.ubuntu.com|https://mirrors.tencent.com|g' \
+          "$f"; \
+    done
 
 # Image layers go from less likely to most likely to change.
 RUN apt-get update && \
