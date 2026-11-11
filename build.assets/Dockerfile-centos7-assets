@@ -4,14 +4,42 @@ FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/centos:7 AS centos-
 
 ARG BUILDARCH
 ARG DEVTOOLSET
-ARG DEVTOOLSET_REPO_BASE=https://buildlogs.centos.org
-ARG GIT_MIRROR=
 
-# CentOS 7 is EOL. Replace the stock yum repos - and any repo files installed
-# later by epel-release / centos-release-scl-rh - with the Tencent mirrors.
-# The shared script also keeps the devtoolset-12 repo (those unsigned RPMs have
-# no Tencent mirror) and can rewrite GitHub clones via GIT_MIRROR.
-COPY tencent-yum-repos.sh /tmp/fix-yum-repo-list.sh
+# devtoolset-12 is only in CentOS buildlogs. The rpms are unsigned since they never were
+# published to the official CentOS SCL repos.
+RUN if [ "${BUILDARCH}" = "arm64" ]; then export BUILDARCH="aarch64"; fi && \
+    if [ "${BUILDARCH}" = "amd64" ]; then export BUILDARCH="x86_64"; fi && \
+    printf '%s\n' \
+    "[${DEVTOOLSET}-build]" \
+    "name=${DEVTOOLSET} - Build" \
+    "baseurl=https://buildlogs.centos.org/c7-${DEVTOOLSET}.${BUILDARCH}/" \
+    "gpgcheck=0" \
+    "enabled=1" \
+    > /etc/yum.repos.d/${DEVTOOLSET}-build.repo
+
+# mirrorlist is no longer available since CentOS 7 EOL. The software collection
+# stuff for arm64 (aarch64) is in /altarch not /centos on vault.centos.org.
+# Make the fixup a script as it needs to be run multiple times as installing
+# and updating centos-release-scl-rh leaves the old unavailable URLs.
+# https://serverfault.com/a/1161847
+#
+# vault.centos.org is rate limited and starts answering 403 once a build asks
+# for too much too quickly, so fan every vault baseurl out over a set of
+# mirrors carrying an identical copy of the vault tree.
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    "sed -e 's/mirror.centos.org/vault.centos.org/g' \\" \
+    "    -e 's/^#.*baseurl=http/baseurl=https/g' \\" \
+    "    -e 's|^baseurl=http://vault.centos.org|baseurl=https://vault.centos.org|g' \\" \
+    "    -e 's/^mirrorlist=http/#mirrorlist=http/g' \\" \
+    "    -i /etc/yum.repos.d/*.repo" \
+    "if [ \"\$(uname -m)\" = 'aarch64' ]; then" \
+    "    sed 's|centos/7/sclo|altarch/7/sclo|g' -i /etc/yum.repos.d/*.repo" \
+    'fi' \
+    "sed -e 's|^\\(baseurl=https://vault.centos.org/[^ ]*\\).*|\\1|' \\" \
+    "    -e 's|^baseurl=https://vault.centos.org/\\(.*\\)|& https://archive.kernel.org/centos-vault/\\1 https://linuxsoft.cern.ch/centos-vault/\\1 https://mirror.nsc.liu.se/centos-store/\\1|' \\" \
+    "    -i /etc/yum.repos.d/*.repo" \
+    > /tmp/fix-yum-repo-list.sh
 RUN chmod 755 /tmp/fix-yum-repo-list.sh && \
     /tmp/fix-yum-repo-list.sh
 
@@ -19,7 +47,8 @@ RUN chmod 755 /tmp/fix-yum-repo-list.sh && \
 # shared between stages, and stop yum expiring metadata that can no longer
 # change (CentOS 7 is EOL and the vault trees are frozen).
 # Without this, every stage deriving from `base` re-downloads the full repodata
-# set in parallel.
+# set, and since BuildKit runs those stages in parallel the burst trips the AWS
+# WAF rate limit in front of vault.centos.org, which answers with a 403.
 RUN sed -i -e '/^keepcache=/d' -e '/^metadata_expire=/d' /etc/yum.conf && \
     printf '%s\n' 'keepcache=1' 'metadata_expire=never' >> /etc/yum.conf
 

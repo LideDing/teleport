@@ -32,9 +32,10 @@ include grpcbox.mk # Requires images.mk
 # ---------------------------------------------------------------------------
 # Mirror configuration for docker builds and docker runs.
 #
-# Base images come from AWS ECR Public (see the Dockerfiles), all package
-# downloads from the Tencent software mirrors. Override any of these on the
-# make command line, or pass extra docker build args via MIRROR_BUILD_ARGS.
+# Base images come from AWS ECR Public (see the Dockerfiles). Debian/Ubuntu apt
+# and the language package managers use the Tencent mirrors; CentOS/yum repos
+# keep their upstream defaults. Override any of these on the make command line,
+# or pass extra docker build args via MIRROR_BUILD_ARGS.
 # ---------------------------------------------------------------------------
 # MIRROR_* is intentionally prefixed: variables named exactly like GOPROXY or
 # PIP_INDEX_URL would be silently overridden by whatever the host exports.
@@ -45,10 +46,9 @@ MIRROR_NPM_REGISTRY ?= $(MIRROR_BASE)/npm
 MIRROR_PIP_INDEX_URL ?= $(MIRROR_BASE)/pypi/simple/
 MIRROR_RUSTUP_DIST_SERVER ?= $(MIRROR_BASE)/rustup
 MIRROR_RUSTUP_UPDATE_ROOT ?= $(MIRROR_BASE)/rustup/rustup
-# Tencent mirrors neither github.com nor the devtoolset-12 RPMs. Point these at
-# an internal mirror if one is available; empty means the upstream URL is used.
+# Tencent does not mirror github.com; GIT_MIRROR can point clones at an
+# internal git mirror. CentOS/yum repos keep their upstream defaults.
 GIT_MIRROR ?=
-DEVTOOLSET_REPO_BASE ?= https://buildlogs.centos.org
 # go1.26.7 -> 1.26.7, which is the ECR Public golang image tag.
 GO_IMAGE ?= public.ecr.aws/docker/library/golang:$(patsubst go%,%,$(GOLANG_VERSION))
 MIRROR_BUILD_ARGS ?=
@@ -273,8 +273,6 @@ buildbox-centos7:
 		--build-arg GID=$(GID) \
 		--build-arg BUILDBOX_CENTOS7_ASSETS=$(BUILDBOX_CENTOS7_ASSETS) \
 		--build-arg GO_IMAGE=$(GO_IMAGE) \
-		--build-arg GIT_MIRROR=$(GIT_MIRROR) \
-		--build-arg DEVTOOLSET_REPO_BASE=$(DEVTOOLSET_REPO_BASE) \
 		--build-arg BUILDARCH=$(HOST_ARCH) \
 		--build-arg TARGETARCH=$(RUNTIME_ARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
@@ -304,8 +302,6 @@ buildbox-centos7-fips:
 		--build-arg GID=$(GID) \
 		--build-arg BUILDBOX_CENTOS7_ASSETS=$(BUILDBOX_CENTOS7_ASSETS) \
 		--build-arg GO_IMAGE=$(GO_IMAGE) \
-		--build-arg GIT_MIRROR=$(GIT_MIRROR) \
-		--build-arg DEVTOOLSET_REPO_BASE=$(DEVTOOLSET_REPO_BASE) \
 		--build-arg BUILDARCH=$(HOST_ARCH) \
 		--build-arg TARGETARCH=$(RUNTIME_ARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
@@ -854,8 +850,6 @@ build-centos7-assets:
 		$(MIRROR_BUILD_ARGS) \
 		--build-arg BUILDARCH=$(HOST_ARCH) \
 		--build-arg DEVTOOLSET=$(DEVTOOLSET) \
-		--build-arg GIT_MIRROR=$(GIT_MIRROR) \
-		--build-arg DEVTOOLSET_REPO_BASE=$(DEVTOOLSET_REPO_BASE) \
 		--build-arg TARGETARCH=$(RUNTIME_ARCH) \
 		--cache-to type=inline \
 		--cache-from $(BUILDBOX_CENTOS7_ASSETS) \
