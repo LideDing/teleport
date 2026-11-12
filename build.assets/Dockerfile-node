@@ -21,6 +21,14 @@ FROM node:${NODE_VERSION}-bullseye AS buildbox
 # https://docs.docker.com/engine/reference/builder/#automatic-platform-args-in-the-global-scope
 ARG BUILDARCH
 
+# Use the Tencent mirrors for package registries. pnpm 11 only reads
+# pnpm_config_* env vars; corepack downloads pnpm itself via COREPACK_NPM_REGISTRY.
+ENV COREPACK_NPM_REGISTRY=https://mirrors.tencent.com/npm \
+    npm_config_registry=https://mirrors.tencent.com/npm/ \
+    pnpm_config_registry=https://mirrors.tencent.com/npm/ \
+    PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple \
+    GOPROXY=https://mirrors.tencent.com/go/,direct
+
 RUN corepack enable pnpm
 
 COPY locale.gen /etc/locale.gen
@@ -31,8 +39,12 @@ ENV LANGUAGE="en_US.UTF-8" \
     LC_CTYPE="en_US.UTF-8" \
     DEBIAN_FRONTEND="noninteractive"
 
+# Debian Bullseye has been moved to archive.debian.org; use the Tencent mirror of it.
 # Install packages.
-RUN apt-get -y update && \
+RUN sed -i -e 's|http://deb.debian.org/debian|https://mirrors.tencent.com/debian-archive/debian|g' \
+           -e 's|http://security.debian.org/debian-security|https://mirrors.tencent.com/debian-archive/debian-security|g' \
+           /etc/apt/sources.list && \
+    apt-get -y update && \
     apt-get install -q -y --no-install-recommends \
     build-essential \
     ca-certificates \
@@ -63,14 +75,16 @@ RUN userdel -r node
 ARG UID
 ARG GID
 RUN groupadd ci --gid=$GID -o && \
-    useradd ci --uid=$UID --gid=$GID --create-home --shell=/bin/sh
+    useradd ci --uid=$UID --gid=$GID -o --create-home --shell=/bin/sh
 
 # Install Rust.
 ARG RUST_VERSION
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH \
-    RUST_VERSION=$RUST_VERSION
+    RUST_VERSION=$RUST_VERSION \
+    RUSTUP_DIST_SERVER=https://mirrors.tencent.com/rustup \
+    RUSTUP_UPDATE_ROOT=https://mirrors.tencent.com/rustup/rustup
 RUN mkdir -p $RUSTUP_HOME && chmod a+w $RUSTUP_HOME && \
     mkdir -p $CARGO_HOME/registry && chmod -R a+w $CARGO_HOME
 
