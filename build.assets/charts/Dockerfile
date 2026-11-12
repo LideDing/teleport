@@ -41,7 +41,11 @@ FROM ubuntu:20.04 AS teleport
 
 # Note that /var/lib/apt/lists/* is cleaned up in the same RUN command as
 # "apt-get update" to reduce the size of the image.
-RUN apt-get update && \
+# Use the Tencent mirror. Plain http, as ca-certificates is not installed yet.
+RUN sed -i -e 's|http://archive.ubuntu.com|http://mirrors.tencent.com|g' \
+           -e 's|http://security.ubuntu.com|http://mirrors.tencent.com|g' \
+           /etc/apt/sources.list && \
+    apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
     # Install dependencies
     DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y ca-certificates dumb-init libelf1 && \

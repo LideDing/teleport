@@ -236,6 +236,7 @@ buildbox-centos7:
 		--build-arg DEVTOOLSET=$(DEVTOOLSET) \
 		--build-arg LIBBPF_VERSION=$(LIBBPF_VERSION) \
 		--build-arg LIBPCSCLITE_VERSION=$(LIBPCSCLITE_VERSION) \
+		--ulimit nofile=1024:1024 \
 		--cache-to type=inline \
 		--cache-from $(BUILDBOX_CENTOS7) \
 		$(if $(PUSH),--push,--load) \
@@ -264,6 +265,7 @@ buildbox-centos7-fips:
 		--build-arg DEVTOOLSET=$(DEVTOOLSET) \
 		--build-arg LIBBPF_VERSION=$(LIBBPF_VERSION) \
 		--build-arg LIBPCSCLITE_VERSION=$(LIBPCSCLITE_VERSION) \
+		--ulimit nofile=1024:1024 \
 		--cache-to type=inline \
 		--cache-from $(BUILDBOX_CENTOS7_FIPS) \
 		$(if $(PUSH),--push,--load) \
