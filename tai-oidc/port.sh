@@ -63,6 +63,8 @@ if ! git apply --3way --whitespace=nowarn "$KIT/hooks.patch"; then
 	echo "hooks.patch did not apply cleanly; resolve conflicts (git status / git diff) using TAI_OIDC_IMPLEMENTATION.md §4." >&2
 	exit 1
 fi
+# git apply --3way stages what it applies; leave committing to the caller.
+git restore --staged -- $(grep -v '^\s*#' "$KIT/hook-files.txt" | sed '/^\s*$/d') 2>/dev/null || true
 
 echo "== 4/6 Promoting go-oidc to a direct dependency =="
 sed -i -E 's#^(\s*github\.com/coreos/go-oidc/v3 v[^ ]+) // indirect$#\1#' go.mod
@@ -74,6 +76,7 @@ go build ./lib/oidcsso/... ./lib/auth/ ./lib/web/ ./lib/modules/ ./tool/tctl/...
 
 echo "== 6/6 Test expectations (tests.patch, best effort) =="
 if git apply --3way --whitespace=nowarn "$KIT/tests.patch"; then
+	git restore --staged -- lib/web/apiserver_test.go 2>/dev/null || true
 	echo "  applied"
 else
 	echo "  tests.patch did not apply; update TestGetWebConfig_WithEntitlements by hand (§6.3)"
