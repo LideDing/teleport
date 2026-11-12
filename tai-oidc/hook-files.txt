@@ -1,0 +1,7 @@
+# Upstream files modified by hooks.patch (keep each change minimal).
+lib/auth/oidc.go
+lib/auth/auth.go
+lib/auth/apiserver.go
+lib/modules/modules.go
+lib/web/apiserver.go
+tool/tctl/sso/configure/oidc.go

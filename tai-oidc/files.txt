@@ -1,0 +1,15 @@
+# New files owned by the TAI OIDC fork. Copied verbatim when porting.
+# Pure protocol (depends only on api/types, lib/services, lib/utils, lib/defaults)
+lib/oidcsso/oidcsso.go
+lib/oidcsso/oidcsso_test.go
+lib/oidcsso/oidcssotest/idp.go
+# Auth server glue (depends on auth.Server internals; mirrors lib/auth/github.go)
+lib/auth/oidc_builtin.go
+lib/auth/oidc_builtin_test.go
+# Proxy web handlers (mirror the GitHub handlers in lib/web/apiserver.go)
+lib/web/oidc_login.go
+lib/web/oidc_login_test.go
+# tctl preset
+tool/tctl/sso/configure/oidc_tai_preset.go
+# Docs
+docs/pages/zero-trust-access/sso/integrate-idp/tai.mdx

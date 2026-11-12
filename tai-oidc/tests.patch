@@ -1,0 +1,37 @@
+diff --git a/lib/web/apiserver_test.go b/lib/web/apiserver_test.go
+index 2c420657de1..da42d44f584 100644
+--- a/lib/web/apiserver_test.go
++++ b/lib/web/apiserver_test.go
+@@ -5113,6 +5113,7 @@ func TestGetWebConfig_WithEntitlements(t *testing.T) {
+ 		IsCloud:            false,
+ 		AutomaticUpgrades:  false,
+ 		JoinActiveSessions: true,
++		OIDC:               true,
+ 		Edition:            modules.BuildOSS, // testBuildType is empty
+ 		Entitlements: map[string]webclient.EntitlementInfo{
+ 			string(entitlements.AccessLists):                {Enabled: false},
+@@ -5131,7 +5132,7 @@ func TestGetWebConfig_WithEntitlements(t *testing.T) {
+ 			string(entitlements.JoinActiveSessions):         {Enabled: true},
+ 			string(entitlements.K8s):                        {Enabled: true},
+ 			string(entitlements.MobileDeviceManagement):     {Enabled: false},
+-			string(entitlements.OIDC):                       {Enabled: false},
++			string(entitlements.OIDC):                       {Enabled: true},
+ 			string(entitlements.OktaSCIM):                   {Enabled: false},
+ 			string(entitlements.OktaUserSync):               {Enabled: false},
+ 			string(entitlements.Policy):                     {Enabled: false},
+@@ -5200,6 +5201,7 @@ func TestGetWebConfig_WithEntitlements(t *testing.T) {
+ 	expectedCfg.AutomaticUpgrades = true
+ 	expectedCfg.AutomaticUpgradesTargetVersion = "v" + teleport.Version
+ 	expectedCfg.JoinActiveSessions = false
++	expectedCfg.OIDC = false
+ 	expectedCfg.Edition = "" // testBuildType is empty
+ 	expectedCfg.TrustedDevices = true
+ 	expectedCfg.Entitlements[string(entitlements.App)] = webclient.EntitlementInfo{Enabled: false}
+@@ -5208,6 +5210,7 @@ func TestGetWebConfig_WithEntitlements(t *testing.T) {
+ 	expectedCfg.Entitlements[string(entitlements.Desktop)] = webclient.EntitlementInfo{Enabled: true, Limit: 44}
+ 	expectedCfg.Entitlements[string(entitlements.JoinActiveSessions)] = webclient.EntitlementInfo{Enabled: false}
+ 	expectedCfg.Entitlements[string(entitlements.K8s)] = webclient.EntitlementInfo{Enabled: false}
++	expectedCfg.Entitlements[string(entitlements.OIDC)] = webclient.EntitlementInfo{Enabled: false}
+ 
+ 	// request and verify enabled features are eventually enabled.
+ 	require.EventuallyWithT(t, func(t *assert.CollectT) {

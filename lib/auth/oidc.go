@@ -37,8 +37,6 @@ type OIDCService interface {
 	ValidateOIDCAuthCallback(ctx context.Context, q url.Values) (*authclient.OIDCAuthResponse, error)
 }
 
-var errOIDCNotImplemented = &trace.AccessDeniedError{Message: "OIDC is only available in enterprise subscriptions"}
-
 // UpsertOIDCConnector creates or updates an OIDC connector.
 func (a *Server) UpsertOIDCConnector(ctx context.Context, connector types.OIDCConnector) (types.OIDCConnector, error) {
 	upserted, err := a.Services.UpsertOIDCConnector(ctx, connector)
@@ -126,34 +124,37 @@ func (a *Server) DeleteOIDCConnector(ctx context.Context, connectorName string) 
 }
 
 // CreateOIDCAuthRequest delegates the method call to the oidcAuthService if present,
-// or returns a NotImplemented error if not present.
+// or to the built-in OIDC implementation otherwise.
 func (a *Server) CreateOIDCAuthRequest(ctx context.Context, req types.OIDCAuthRequest) (*types.OIDCAuthRequest, error) {
-	if a.oidcAuthService == nil {
-		return nil, errOIDCNotImplemented
+	svc, err := a.getOIDCService()
+	if err != nil {
+		return nil, trace.Wrap(err)
 	}
 
-	rq, err := a.oidcAuthService.CreateOIDCAuthRequest(ctx, req)
+	rq, err := svc.CreateOIDCAuthRequest(ctx, req)
 	return rq, trace.Wrap(err)
 }
 
 // CreateOIDCAuthRequestForMFA delegates the method call to the oidcAuthService if present,
-// or returns a NotImplemented error if not present.
+// or to the built-in OIDC implementation otherwise.
 func (a *Server) CreateOIDCAuthRequestForMFA(ctx context.Context, req types.OIDCAuthRequest) (*types.OIDCAuthRequest, error) {
-	if a.oidcAuthService == nil {
-		return nil, errOIDCNotImplemented
+	svc, err := a.getOIDCService()
+	if err != nil {
+		return nil, trace.Wrap(err)
 	}
 
-	rq, err := a.oidcAuthService.CreateOIDCAuthRequestForMFA(ctx, req)
+	rq, err := svc.CreateOIDCAuthRequestForMFA(ctx, req)
 	return rq, trace.Wrap(err)
 }
 
 // ValidateOIDCAuthCallback delegates the method call to the oidcAuthService if present,
-// or returns a NotImplemented error if not present.
+// or to the built-in OIDC implementation otherwise.
 func (a *Server) ValidateOIDCAuthCallback(ctx context.Context, q url.Values) (*authclient.OIDCAuthResponse, error) {
-	if a.oidcAuthService == nil {
-		return nil, errOIDCNotImplemented
+	svc, err := a.getOIDCService()
+	if err != nil {
+		return nil, trace.Wrap(err)
 	}
 
-	resp, err := a.oidcAuthService.ValidateOIDCAuthCallback(ctx, q)
+	resp, err := svc.ValidateOIDCAuthCallback(ctx, q)
 	return resp, trace.Wrap(err)
 }

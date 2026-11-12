@@ -1334,6 +1334,9 @@ type Server struct {
 
 	samlAuthService SAMLService
 	oidcAuthService OIDCService
+	// oidcBuiltin holds the built-in OIDC service used when no
+	// oidcAuthService has been injected. See oidc_builtin.go.
+	oidcBuiltin oidcBuiltinState
 
 	releaseService release.Client
 

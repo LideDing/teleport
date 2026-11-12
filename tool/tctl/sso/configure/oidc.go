@@ -165,6 +165,7 @@ func addOIDCCommand(cmd *SSOConfigureCommand) *AuthKindCommand {
 	sub.Flag("prompt", "Optional OIDC prompt. Example values: none, select_account, login, consent.").StringVar(&spec.Prompt)
 	sub.Flag("scope", "Scope specifies additional scopes set by provider. Each repetition of the flag declares one scope. Examples: email, groups, openid.").StringsVar(&spec.Scope)
 	sub.Flag("acr", "Authentication Context Class Reference values.").StringVar(&spec.ACR)
+	sub.Flag("username-claim", "Name of the ID token claim used as the Teleport username. Defaults to email.").StringVar(&spec.UsernameClaim)
 	sub.Flag("provider", "Sets the external identity provider type to enable IdP specific workarounds. Examples: ping, adfs, netiq, okta.").StringVar(&spec.Provider)
 
 	// google only.

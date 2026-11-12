@@ -1,0 +1,128 @@
+diff --git a/lib/auth/apiserver.go b/lib/auth/apiserver.go
+index 168718d10a3..2bf749c3e4e 100644
+--- a/lib/auth/apiserver.go
++++ b/lib/auth/apiserver.go
+@@ -167,6 +167,7 @@ func NewAPIServer(config *APIConfig) (http.Handler, error) {
+ 
+ 	// SSO validation handlers
+ 	srv.POST("/:version/github/requests/validate", srv.WithAuth(srv.validateGithubAuthCallback))
++	srv.POST("/:version/oidc/requests/validate", srv.WithAuth(srv.validateOIDCAuthCallback))
+ 
+ 	// Migrated/deleted endpoints with 501 Not Implemented handlers.
+ 	srv.POST("/:version/reversetunnels", httpMigratedHandler)
+diff --git a/lib/auth/auth.go b/lib/auth/auth.go
+index b531b975f5a..9794833ff29 100644
+--- a/lib/auth/auth.go
++++ b/lib/auth/auth.go
+@@ -1334,6 +1334,9 @@ type Server struct {
+ 
+ 	samlAuthService SAMLService
+ 	oidcAuthService OIDCService
++	// oidcBuiltin holds the built-in OIDC service used when no
++	// oidcAuthService has been injected. See oidc_builtin.go.
++	oidcBuiltin oidcBuiltinState
+ 
+ 	releaseService release.Client
+ 
+diff --git a/lib/auth/oidc.go b/lib/auth/oidc.go
+index 00557fddd54..7e9c15c1638 100644
+--- a/lib/auth/oidc.go
++++ b/lib/auth/oidc.go
+@@ -37,8 +37,6 @@ type OIDCService interface {
+ 	ValidateOIDCAuthCallback(ctx context.Context, q url.Values) (*authclient.OIDCAuthResponse, error)
+ }
+ 
+-var errOIDCNotImplemented = &trace.AccessDeniedError{Message: "OIDC is only available in enterprise subscriptions"}
+-
+ // UpsertOIDCConnector creates or updates an OIDC connector.
+ func (a *Server) UpsertOIDCConnector(ctx context.Context, connector types.OIDCConnector) (types.OIDCConnector, error) {
+ 	upserted, err := a.Services.UpsertOIDCConnector(ctx, connector)
+@@ -126,34 +124,37 @@ func (a *Server) DeleteOIDCConnector(ctx context.Context, connectorName string)
+ }
+ 
+ // CreateOIDCAuthRequest delegates the method call to the oidcAuthService if present,
+-// or returns a NotImplemented error if not present.
++// or to the built-in OIDC implementation otherwise.
+ func (a *Server) CreateOIDCAuthRequest(ctx context.Context, req types.OIDCAuthRequest) (*types.OIDCAuthRequest, error) {
+-	if a.oidcAuthService == nil {
+-		return nil, errOIDCNotImplemented
++	svc, err := a.getOIDCService()
++	if err != nil {
++		return nil, trace.Wrap(err)
+ 	}
+ 
+-	rq, err := a.oidcAuthService.CreateOIDCAuthRequest(ctx, req)
++	rq, err := svc.CreateOIDCAuthRequest(ctx, req)
+ 	return rq, trace.Wrap(err)
+ }
+ 
+ // CreateOIDCAuthRequestForMFA delegates the method call to the oidcAuthService if present,
+-// or returns a NotImplemented error if not present.
++// or to the built-in OIDC implementation otherwise.
+ func (a *Server) CreateOIDCAuthRequestForMFA(ctx context.Context, req types.OIDCAuthRequest) (*types.OIDCAuthRequest, error) {
+-	if a.oidcAuthService == nil {
+-		return nil, errOIDCNotImplemented
++	svc, err := a.getOIDCService()
++	if err != nil {
++		return nil, trace.Wrap(err)
+ 	}
+ 
+-	rq, err := a.oidcAuthService.CreateOIDCAuthRequestForMFA(ctx, req)
++	rq, err := svc.CreateOIDCAuthRequestForMFA(ctx, req)
+ 	return rq, trace.Wrap(err)
+ }
+ 
+ // ValidateOIDCAuthCallback delegates the method call to the oidcAuthService if present,
+-// or returns a NotImplemented error if not present.
++// or to the built-in OIDC implementation otherwise.
+ func (a *Server) ValidateOIDCAuthCallback(ctx context.Context, q url.Values) (*authclient.OIDCAuthResponse, error) {
+-	if a.oidcAuthService == nil {
+-		return nil, errOIDCNotImplemented
++	svc, err := a.getOIDCService()
++	if err != nil {
++		return nil, trace.Wrap(err)
+ 	}
+ 
+-	resp, err := a.oidcAuthService.ValidateOIDCAuthCallback(ctx, q)
++	resp, err := svc.ValidateOIDCAuthCallback(ctx, q)
+ 	return resp, trace.Wrap(err)
+ }
+diff --git a/lib/modules/modules.go b/lib/modules/modules.go
+index f48b87fdbab..095e08d90a2 100644
+--- a/lib/modules/modules.go
++++ b/lib/modules/modules.go
+@@ -428,6 +428,8 @@ func (p *defaultModules) Features() Features {
+ 			entitlements.Desktop:            {Enabled: true, Limit: 0},
+ 			entitlements.JoinActiveSessions: {Enabled: true, Limit: 0},
+ 			entitlements.K8s:                {Enabled: true, Limit: 0},
++			// This fork ships a built-in OIDC implementation (lib/oidcsso, lib/auth/oidc_builtin.go).
++			entitlements.OIDC: {Enabled: true, Limit: 0},
+ 		},
+ 	}
+ }
+diff --git a/lib/web/apiserver.go b/lib/web/apiserver.go
+index 82b880fab24..b8316d63862 100644
+--- a/lib/web/apiserver.go
++++ b/lib/web/apiserver.go
+@@ -981,6 +981,9 @@ func (h *Handler) bindDefaultEndpoints() {
+ 	h.GET("/webapi/github/callback", h.WithMetaRedirect(h.githubCallback))
+ 	h.POST("/webapi/github/login/console", h.WithLimiter(h.githubLoginConsole))
+ 
++	// OIDC connector handlers (built-in OIDC, see oidc_login.go)
++	h.bindOIDCLoginHandlers()
++
+ 	// MFA public endpoints.
+ 	h.POST("/webapi/sites/:site/mfa/required", h.WithClusterAuth(h.isMFARequired))
+ 	h.POST("/webapi/mfa/login/begin", h.WithLimiter(h.mfaLoginBegin))
+diff --git a/tool/tctl/sso/configure/oidc.go b/tool/tctl/sso/configure/oidc.go
+index a9f7ec1f6a6..b2d2763cc8d 100644
+--- a/tool/tctl/sso/configure/oidc.go
++++ b/tool/tctl/sso/configure/oidc.go
+@@ -165,6 +165,7 @@ func addOIDCCommand(cmd *SSOConfigureCommand) *AuthKindCommand {
+ 	sub.Flag("prompt", "Optional OIDC prompt. Example values: none, select_account, login, consent.").StringVar(&spec.Prompt)
+ 	sub.Flag("scope", "Scope specifies additional scopes set by provider. Each repetition of the flag declares one scope. Examples: email, groups, openid.").StringsVar(&spec.Scope)
+ 	sub.Flag("acr", "Authentication Context Class Reference values.").StringVar(&spec.ACR)
++	sub.Flag("username-claim", "Name of the ID token claim used as the Teleport username. Defaults to email.").StringVar(&spec.UsernameClaim)
+ 	sub.Flag("provider", "Sets the external identity provider type to enable IdP specific workarounds. Examples: ping, adfs, netiq, okta.").StringVar(&spec.Provider)
+ 
+ 	// google only.

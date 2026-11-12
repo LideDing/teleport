@@ -1,0 +1,105 @@
+---
+title: 使用 TAI 统一认证作为 SSO 提供方
+sidebar_label: TAI
+description: 如何配置 Teleport 通过 TAI 统一认证（OIDC）登录
+tags:
+ - sso
+ - how-to
+ - zero-trust
+---
+
+本指南说明如何在本 fork 构建的 Teleport 中，通过 OIDC 接入内部 **TAI 统一认证**，
+支持 Web UI 登录、`tsh login` 登录以及 `tctl sso test` 诊断。
+
+<Admonition type="note">
+上游 Teleport OSS 中 OIDC 为 Enterprise 功能。本 fork 在 `lib/oidcsso`（协议）与 `lib/auth/oidc_builtin.go`（接线）
+中内建了 OIDC 实现，并在 `lib/modules/modules.go` 中启用了 OIDC entitlement。
+若注入了 enterprise `OIDCService`，则优先使用 enterprise 实现。
+</Admonition>
+
+## 工作原理
+
+1. 用户在 Web UI 点击 “TAI” 登录按钮（或执行 `tsh login --auth=tai`）。
+2. Proxy 请求 Auth Service 创建 OIDC 授权请求，浏览器被重定向到 TAI 授权页。
+3. 用户在 TAI 完成认证后，TAI 回调 `https://<proxy>/v1/webapi/oidc/callback`。
+4. Auth Service 用授权码换取 token，校验 ID token（签名、`iss`、`aud`、`exp`、`nonce`），
+   使用 `user_name` claim 作为 Teleport 用户名，并按 `claims_to_roles` 映射角色。
+5. Auth Service 签发 Web session（浏览器）或 SSH/TLS 证书（`tsh`）。
+
+## 前置条件
+
+- 在 TAI 后台登记应用，获得 `client_id` / `client_secret`。
+- 在 TAI 后台登记回调地址：`https://<proxy公网地址>/v1/webapi/oidc/callback`。
+- Auth Service 能访问 TAI 的 `<issuer>/.well-known/openid-configuration` 及其 JWKS 地址。
+
+## 第 1 步：创建连接器
+
+使用 `tctl sso configure` 的 `tai` 预设（自动设置 `username_claim: user_name` 与
+`scope: [openid, profile]`）：
+
+```code
+$ tctl sso configure oidc --preset tai \
+    --issuer-url https://<TAI_ISSUER_HOST> \
+    --id <TAI_CLIENT_ID> --secret <TAI_CLIENT_SECRET> \
+    --redirect-url https://<proxy公网地址>/v1/webapi/oidc/callback \
+    -r 'user_name,*,access' > tai.yaml
+```
+
+或手写连接器：
+
+```yaml
+kind: oidc
+version: v3
+metadata:
+  name: tai
+spec:
+  issuer_url: https://<TAI_ISSUER_HOST>
+  client_id: <TAI_CLIENT_ID>
+  client_secret: <TAI_CLIENT_SECRET>
+  redirect_url:
+  - https://<proxy公网地址>/v1/webapi/oidc/callback
+  scope: [openid, profile]
+  # TAI 的用户名 claim 为 user_name（默认是 email）
+  username_claim: user_name
+  display: "TAI 统一认证"
+  claims_to_roles:
+  - claim: user_name
+    value: "*"
+    roles: [access]
+```
+
+`claims_to_roles` 的 `value` 支持 `*` 通配、`^...$` 正则以及 `$1` 捕获组展开，
+语义与 SAML / GitHub 连接器一致。
+
+## 第 2 步：测试连接器
+
+```code
+$ tctl sso test tai.yaml
+```
+
+该命令会打开浏览器走完 TAI 登录流程（不创建用户、不签发证书），并输出
+ID token claims、计算出的 traits / roles 等诊断信息。
+
+## 第 3 步：创建连接器并登录
+
+```code
+$ tctl create -f tai.yaml
+$ tsh login --proxy=<proxy公网地址> --auth=tai
+```
+
+Web UI 登录页会自动出现 “TAI 统一认证” 按钮。
+
+## 用户与 traits
+
+- Teleport 用户名取自 `user_name` claim，去除首尾空白并转为小写。
+- ID token 中的每个字符串 / 数字 / 布尔 / 数组 claim 都会成为用户 trait，
+  角色模板中可通过 `{{external.user_name}}`、`{{external.name}}` 等引用。
+- 若 ID token 中没有 `logins` claim，`logins` trait 默认取 Teleport 用户名，
+  因此 `{{internal.logins}}` 默认解析为该用户名。可用 Login Rules 覆盖。
+- 若同名本地用户（非 OIDC 创建）已存在，登录会被拒绝。
+
+## 限制
+
+- 不支持 SSO MFA（`CreateOIDCAuthRequestForMFA` 返回 NotImplemented）。
+- 不支持 Request Object、Entra ID groups、Google Workspace 服务账号等 enterprise 扩展。
+- `user_name` 必须在 TAI 中唯一且稳定；否则请改用 `username_claim: sub`。

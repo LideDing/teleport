@@ -428,6 +428,8 @@ func (p *defaultModules) Features() Features {
 			entitlements.Desktop:            {Enabled: true, Limit: 0},
 			entitlements.JoinActiveSessions: {Enabled: true, Limit: 0},
 			entitlements.K8s:                {Enabled: true, Limit: 0},
+			// This fork ships a built-in OIDC implementation (lib/oidcsso, lib/auth/oidc_builtin.go).
+			entitlements.OIDC: {Enabled: true, Limit: 0},
 		},
 	}
 }
