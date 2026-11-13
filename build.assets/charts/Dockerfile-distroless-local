@@ -1,0 +1,39 @@
+# Distroless image for a Teleport built from this source tree (AGPL-3.0).
+#
+# Unlike Dockerfile-distroless, which unpacks a Gravitational release .deb,
+# this image copies the binaries produced by `make full` from the build
+# context. No Gravitational-distributed binaries (Community Edition or
+# Enterprise) end up in the image; the only third-party content is the
+# distroless base and a few Debian runtime packages.
+#
+# Built by `make image-local`, which prepares the build context.
+ARG BASE_IMAGE=gcr.io/distroless/cc-debian12
+
+FROM debian:12 AS staging
+# Use the Tencent mirror. Plain http, as ca-certificates is not installed.
+RUN sed -i 's|http://deb.debian.org|http://mirrors.tencent.com|g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update
+COPY fetch-debs ./
+# libfido2-1 and its deps: tctl/tsh from `make full` link libfido2 dynamically
+# (the release build links it statically).
+RUN ./fetch-debs dumb-init libpam0g libaudit1 libcap-ng0 libfido2-1 libcbor0.8 libudev1 zlib1g
+COPY bin/ /opt/teleport/usr/local/bin/
+RUN mkdir -p /opt/teleport/etc/teleport && \
+    chmod 0755 /opt/teleport/usr/local/bin/*
+
+FROM $BASE_IMAGE
+ARG TELEPORT_VERSION
+ARG VCS_REF
+COPY --from=staging /opt/staging/root /
+COPY --from=staging /opt/staging/status /var/lib/dpkg/status.d
+COPY --from=staging /opt/teleport /
+LABEL org.opencontainers.image.title="teleport" \
+      org.opencontainers.image.description="Teleport built from source with built-in OIDC (TAI)" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.version="${TELEPORT_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+ENV TELEPORT_TOOLS_VERSION=off
+# Attempt a graceful shutdown by default
+# See https://goteleport.com/docs/reference/signals/ for signal reference.
+STOPSIGNAL SIGQUIT
+ENTRYPOINT ["/usr/bin/dumb-init", "/usr/local/bin/teleport", "start", "-c", "/etc/teleport/teleport.yaml"]

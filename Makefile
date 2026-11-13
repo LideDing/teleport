@@ -1765,6 +1765,37 @@ image: clean docker-binaries build-archive oss-deb
 		--build-arg DEB_PATH="./teleport_$(VERSION)_$(ARCH).deb"
 	if [ -f e/Makefile ]; then $(MAKE) -C e image PIV=$(PIV); fi
 
+# make image-local - Builds a distroless image from the binaries in $(BUILDDIR)
+# (run `make full` first). Unlike `make image`, it never downloads
+# Gravitational-distributed packages: the image contains only binaries built
+# from this source tree, plus the distroless base and Debian runtime libraries.
+# The tag defaults to <version>-tai-<commit the binaries were built from>.
+LOCAL_IMAGE ?= teleport-tai
+LOCAL_IMAGE_TAG ?=
+LOCAL_IMAGE_BINARIES = teleport tctl tsh tbot fdpass-teleport
+.PHONY: image-local
+image-local:
+	@set -e; \
+	for b in $(LOCAL_IMAGE_BINARIES); do \
+		test -x $(BUILDDIR)/$$b || { echo "missing $(BUILDDIR)/$$b, run 'make full' first" >&2; exit 1; }; \
+	done; \
+	commit=$$($(BUILDDIR)/teleport version | sed -n 's/.*-g\([0-9a-f]\{7,\}\).*/\1/p'); \
+	commit=$$(git rev-parse --verify --quiet "$$commit^{commit}") || { echo "cannot map $(BUILDDIR)/teleport to a git commit" >&2; exit 1; }; \
+	if [ "$$commit" != "$$(git rev-parse HEAD)" ]; then \
+		echo "WARNING: $(BUILDDIR) binaries were built from $$commit, not HEAD; run 'make full' to rebuild" >&2; \
+	fi; \
+	tag="$(LOCAL_IMAGE_TAG)"; \
+	[ -n "$$tag" ] || tag="$(VERSION)-tai-$$(git rev-parse --short=10 $$commit)"; \
+	ctx=$(BUILDDIR)/image-local; \
+	rm -rf $$ctx && mkdir -p $$ctx/bin; \
+	cp $(addprefix $(BUILDDIR)/,$(LOCAL_IMAGE_BINARIES)) $$ctx/bin/; \
+	cp build.assets/charts/Dockerfile-distroless-local build.assets/charts/fetch-debs $$ctx/; \
+	docker build $$ctx -f $$ctx/Dockerfile-distroless-local --platform linux/$(ARCH) \
+		--build-arg TELEPORT_VERSION="$$tag" --build-arg VCS_REF="$$commit" \
+		-t "$(LOCAL_IMAGE):$$tag"; \
+	rm -rf $$ctx; \
+	echo "built $(LOCAL_IMAGE):$$tag"
+
 .PHONY: print-version
 print-version:
 	@echo $(VERSION)

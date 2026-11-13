@@ -1,0 +1,111 @@
+# Helm values for the teleport-cluster chart (examples/chart/teleport-cluster)
+# running the self-built Teleport with built-in TAI OIDC.
+#
+#   helm upgrade --install teleport examples/chart/teleport-cluster \
+#     -n teleport -f tai-oidc/k8s/values.yaml
+#
+# See tai-oidc/k8s/README.md for the full procedure.
+
+clusterName: teleport.agpl.ap-singapore.oitcep.com
+# Name of this Kubernetes cluster as shown to Teleport users. Defaults to clusterName.
+kubeClusterName: ""
+
+##################################################
+# Image: self-built only (make full && make image-local).
+# Never use the chart defaults (public.ecr.aws/gravitational/*): those images
+# contain Gravitational-distributed binaries, not this source build.
+##################################################
+image: your-registry.example.com/teleport/teleport-tai
+# Must be a valid semver; the chart derives the major version from it.
+teleportVersionOverride: "18.10.0-tai-7f2e4326ba"
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+# - name: teleport-registry
+
+# The Enterprise image and license are never used. enterpriseImage points at
+# the self-built image too, so flipping `enterprise` cannot pull an official image.
+enterprise: false
+enterpriseImage: your-registry.example.com/teleport/teleport-tai
+
+# The operator subchart only ships an official image. Keep it disabled.
+operator:
+  enabled: false
+
+##################################################
+# Networking, TLS (cert-manager) and DNS (external-dns)
+##################################################
+# Single port 443 for web, tsh, SSH, reverse tunnels and Kubernetes.
+proxyListenerMode: multiplex
+
+# cert-manager issues the proxy certificate into the secret "teleport-tls"
+# (name fixed by the chart). The Certificate always requests both
+# <clusterName> and *.<clusterName>, so the issuer MUST solve DNS-01
+# (Let's Encrypt does not issue wildcards over HTTP-01).
+# The proxy re-reads the secret every 12h, so renewals need no restart.
+highAvailability:
+  replicaCount: 1
+  certManager:
+    enabled: true
+    issuerName: letsencrypt-dns01   # replace with your (Cluster)Issuer
+    issuerKind: ClusterIssuer       # or Issuer (must then live in this namespace)
+    issuerGroup: cert-manager.io
+    addCommonName: true
+  # The chart scales proxies to 2 replicas when certManager is enabled.
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# Mutually exclusive with certManager. Use only to supply a certificate by hand:
+# tls:
+#   existingSecretName: teleport-tls
+
+service:
+  type: LoadBalancer
+  spec: {}
+  # loadBalancerIP: "1.2.3.4"
+
+# Annotations for the proxy Service only. Do NOT put the external-dns
+# annotations under the top-level `annotations.service`: that also applies to
+# the auth Services, two of which are headless, and external-dns would then
+# publish the public hostname with auth pod IPs.
+proxy:
+  annotations:
+    service:
+      # external-dns creates records for the cluster name and its wildcard
+      # (application access uses <app>.<clusterName>) pointing at the
+      # LoadBalancer address. Must match clusterName above.
+      external-dns.alpha.kubernetes.io/hostname: "teleport.agpl.ap-singapore.oitcep.com,*.teleport.agpl.ap-singapore.oitcep.com"
+      external-dns.alpha.kubernetes.io/ttl: "600"
+      # Environment specific LB annotations go here too, e.g. on TKE:
+      # service.kubernetes.io/qcloud-loadbalancer-internal-subnetid: subnet-xxxxxxxx
+
+##################################################
+# Authentication: TAI OIDC only
+##################################################
+# - type/connectorName: every login (Web UI and `tsh login`) goes to the "tai"
+#   OIDC connector. Create the connector after install (README section 5);
+#   until then nobody can log in, administration is via
+#   `kubectl exec deploy/teleport-auth -- tctl`.
+# - localAuth: false: the auth server rejects username/password logins,
+#   invites and password resets; the Web UI hides the password form.
+#   Break-glass: `kubectl exec deploy/teleport-auth -- tctl ...` (needs
+#   Kubernetes access to this namespace), or temporarily set localAuth: true.
+# - secondFactors only applies to per-session MFA for SSO users here.
+authentication:
+  type: oidc
+  connectorName: tai
+  localAuth: false
+  secondFactors: ["otp", "webauthn"]
+
+##################################################
+# Storage (standalone mode: SQLite on a PVC, one auth replica)
+##################################################
+chartMode: standalone
+persistence:
+  enabled: true
+  volumeSize: 10Gi
+  # storageClassName: cbs
+
+log:
+  level: INFO
+  format: text
