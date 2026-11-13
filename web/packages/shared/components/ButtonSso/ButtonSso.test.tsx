@@ -28,6 +28,7 @@ test.each`
   ${'github'}    | ${'res-icon-github'}
   ${'bitbucket'} | ${'res-icon-atlassianbitbucket'}
   ${'google'}    | ${'res-icon-google'}
+  ${'openid'}    | ${'res-icon-tai'}
 `('rendering of $ssoType', ({ ssoType, expectedIcon }) => {
   render(<ButtonSso ssoType={ssoType} title="hello" />);
 

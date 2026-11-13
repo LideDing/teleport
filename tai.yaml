@@ -1,0 +1,19 @@
+kind: oidc
+metadata:
+  name: tai
+spec:
+  claims_to_roles:
+  - claim: user_name
+    roles:
+    - access
+    value: '*'
+  client_id: teleport-agpl
+  client_secret: CZMFUY9IKVA24T0BBHFDRVUORPWSYPYA
+  display: TAI
+  issuer_url: https://tai.it.tencent.com/api/auth-center/oauth2/
+  redirect_url: https://teleport.agpl.oitcep.com/v1/webapi/oidc/callback
+  scope:
+  - openid
+  - profile
+  username_claim: user_name
+version: v3

@@ -57,6 +57,9 @@ export function SSOIcon({ type }: { type: SSOType }) {
       return <ResourceIcon name="google" {...commonResourceIconProps} />;
     case 'okta':
       return <ResourceIcon name="okta" {...commonResourceIconProps} />;
+    // OIDC in this fork is TAI unified authentication.
+    case 'openid':
+      return <ResourceIcon name="tai" {...commonResourceIconProps} />;
     default:
       // provide default icon for unknown social providers
       return <Icons.Key data-testid="icon" />;

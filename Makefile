@@ -296,6 +296,11 @@ TEST_KUBE ?=
 # To avoid breaking other parts of the release pipeline, the easiest fix is to
 # unexport HELMJANITOR so the child uses the definition from its Makefile.
 unexport HELMJANITOR
+# CLANG_BPF_SYS_INCLUDES runs $(shell $(CLANG) ...). If it is exported, make
+# expands it while building the environment for every other $(shell) call, at
+# which point $(CLANG) expands empty and bash prints "-: invalid option".
+# It is only referenced in make recipes, so it does not need to be exported.
+unexport CLANG_BPF_SYS_INCLUDES
 export
 
 TEST_LOG_DIR ?= ${abspath ./test-logs}
