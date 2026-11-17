@@ -49,17 +49,20 @@ teleport-update artifact signature public key is not configured
 ```bash
 cd /root/github.com/teleport
 
-# 生成 ECDSA P-256 密钥对：cosign.key（私钥）/ cosign.pub（公钥）
-cosign generate-key-pair
+# 生成 ECDSA P-256 私钥（需要密码时在末尾加 -aes256）
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 \
+  -out teleport-signing.key
+chmod 600 teleport-signing.key
 
-# 把公钥转成 base64，供编译时注入
-export KEY=$(base64 -w0 cosign.pub)
-echo "$KEY" > cosign.pub.b64
+# 导出公钥并转成 base64，供编译时注入
+openssl pkey -in teleport-signing.key -pubout -out teleport-signing.pub
+export KEY=$(base64 -w0 teleport-signing.pub)
+echo "$KEY" > teleport-signing.pub.b64
 ```
 
 要求：
 
-- `cosign.key` 只保存在构建机或离线环境，绝不能上传 COS 或放进 Web 目录；
+- `teleport-signing.key` 只保存在构建机或离线环境，绝不能上传 COS 或放进 Web 目录；
 - 主密钥和备份密钥都必须配置，本地部署可以两把都用同一个公钥。
 
 ### 1.2 编译并注入公钥
@@ -92,7 +95,8 @@ cd build/artifacts
 TAR="teleport-v${TP_VERSION}-linux-amd64-bin.tar.gz"
 
 sha256sum "$TAR" > "$TAR.sha256"
-cosign sign-blob --yes --key /path/to/cosign.key --b64-signature "$TAR" > "$TAR.sig"
+openssl dgst -sha256 -sign /root/github.com/teleport/teleport-signing.key "$TAR" \
+  | openssl base64 -A > "$TAR.sig"
 
 coscli cp "$TAR"        cos://<bucket>/
 coscli cp "$TAR.sha256" cos://<bucket>/
@@ -642,7 +646,7 @@ Teleport 的 Server 和 Agent 是同一个 `teleport` 二进制，`tsh`/`tctl` �
 
 不需要重新生成的东西：
 
-- **签名密钥**：同一对 cosign 密钥可以签所有架构；公钥只注入一次到各架构的 `teleport-update`；
+- **签名密钥**：同一对签名密钥可以签所有架构；公钥只注入一次到各架构的 `teleport-update`；
 - **集群 CA**：由 Server 自动生成，与架构无关；
 - **CDN 地址与版本号**：仍使用同一个 `TELEPORT_CDN_BASE_URL` 和 `18.11.1`；
 - **每个 tarball 单独生成** `.sha256` / `.sig`，签名命令不变。
@@ -720,7 +724,8 @@ TAR="teleport-v${TP_VERSION}-linux-arm64-bin.tar.gz"
 
 ```bash
 sha256sum "$TAR" > "$TAR.sha256"
-cosign sign-blob --yes --key /path/to/cosign.key --b64-signature "$TAR" > "$TAR.sig"
+openssl dgst -sha256 -sign /root/github.com/teleport/teleport-signing.key "$TAR" \
+  | openssl base64 -A > "$TAR.sig"
 
 coscli cp "$TAR"        cos://<bucket>/
 coscli cp "$TAR.sha256" cos://<bucket>/

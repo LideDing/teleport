@@ -13,8 +13,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$ROOT/build/artifacts}"
-KEY="${TELEPORT_SIGN_KEY:-$ROOT/cosign.key}"
-PUB="${TELEPORT_SIGN_PUB:-$ROOT/cosign.pub}"
+KEY="${TELEPORT_SIGN_KEY:-$ROOT/teleport-signing.key}"
+PUB="${TELEPORT_SIGN_PUB:-$ROOT/teleport-signing.pub}"
 
 KEYGEN=0
 KEYGEN_ONLY=0
@@ -36,8 +36,8 @@ usage() {
   --keygen        生成 P-256 密钥对（已存在时需配合 --force）
   --keygen-only   只生成密钥对，不签名
   --force         覆盖已存在的私钥
-  --key PATH      私钥路径，默认 cosign.key
-  --pub PATH      公钥路径，默认 cosign.pub
+  --key PATH      私钥路径，默认 teleport-signing.key
+  --pub PATH      公钥路径，默认 teleport-signing.pub
   --dir PATH      产物目录，默认 build/artifacts
   -h, --help      显示本帮助
 USAGE

@@ -21,13 +21,13 @@ Teleport 的二进制下载地址不是 `teleport.yaml` 中的服务端配置项
 - `tsh` / `tctl` 自动更新会被静默禁用（`lib/autoupdate/tools/utils.go:209-215`）。
 
 > **重要：换 CDN 只解决“从哪里下载”，不解决“签名校验”。**
-> v18.11.1 的 `teleport-update` 会校验产物的 cosign 分离签名（`lib/autoupdate/agent/installer.go:234-236`）。自编译的 updater 如果没有内置公钥，连 `status` 都跑不起来，会报 `teleport-update artifact signature public key is not configured`（`lib/autoupdate/agent/installer.go:362-368`）。因此本手册同时包含自建密钥与签名步骤。
+> v18.11.1 的 `teleport-update` 会校验产物的分离签名（`lib/autoupdate/agent/installer.go:234-236`）。自编译的 updater 如果没有内置公钥，连 `status` 都跑不起来，会报 `teleport-update artifact signature public key is not configured`（`lib/autoupdate/agent/installer.go:362-368`）。因此本手册同时包含自建密钥与签名步骤。
 
 ## 2. 前置条件
 
 - 已检出 Teleport v18.11.1 源码；
 - Go 1.25+、make、gcc 等 `make full` 所需工具链；
-- 已安装 [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)（用于生成密钥和签名）；
+- 已安装 OpenSSL（用于生成密钥和签名，系统一般自带）；
 - 一个腾讯云 COS 桶，满足：
   - 使用 HTTPS 访问（`spec.base_url` 只接受 `https://`，见 `lib/autoupdate/agent/config.go:242-245`）；
   - 允许匿名 GET（`teleport-update` 使用普通 HTTP GET，不支持 COS 签名头或预签名 URL）；
@@ -38,9 +38,17 @@ Teleport 的二进制下载地址不是 `teleport.yaml` 中的服务端配置项
 只需执行一次。私钥必须离线妥善保管，公钥会编译进 `teleport-update`。
 
 ```bash
-cosign generate-key-pair
-export KEY=$(base64 -w0 cosign.pub)
-echo "$KEY" > cosign.pub.b64
+cd /root/github.com/teleport
+
+# 生成 ECDSA P-256 私钥；需要密码时在末尾加 -aes256
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 \
+  -out teleport-signing.key
+chmod 600 teleport-signing.key
+
+# 导出公钥并转成 base64，供编译时注入
+openssl pkey -in teleport-signing.key -pubout -out teleport-signing.pub
+export KEY=$(base64 -w0 teleport-signing.pub)
+echo "$KEY" > teleport-signing.pub.b64
 ```
 
 说明：
@@ -48,6 +56,7 @@ echo "$KEY" > cosign.pub.b64
 - 主密钥和备份密钥必须同时配置；本地部署可以两个都用同一把密钥。
 - 编译进二进制的公钥格式为：PEM（`PUBLIC KEY`）→ base64（标准编码）→ 通过 ldflags 注入。
 - 签名算法为 ECDSA P-256 + SHA-256，签名文件内容是 ASN.1 DER 签名的 base64 编码。
+- 私钥可用 `-aes256` 加密；`sign-teleport-artifacts.sh` 通过 `TELEPORT_SIGN_PASS` 读取密码。
 
 ## 4. 编译
 
@@ -126,15 +135,14 @@ TAR=teleport-v18.11.1-linux-amd64-bin.tar.gz
 # 校验和：前 64 字节必须是十六进制 SHA-256
 sha256sum "$TAR" > "$TAR.sha256"
 
-# 分离签名（cosign v3）：--output-signature 已废弃，必须用 --bundle
-# --tlog-upload=false：Teleport 只校验签名本身，不需要上传 Rekor
-cosign sign-blob --yes --key /path/to/cosign.key \
-  --bundle /tmp/tar.bundle.json --tlog-upload=false "$TAR"
-jq -r '.messageSignature.signature' /tmp/tar.bundle.json > "$TAR.sig"
+# 分离签名：单行 base64 的 ECDSA-SHA256（ASN.1 DER）
+openssl dgst -sha256 -sign /root/github.com/teleport/teleport-signing.key "$TAR" \
+  | openssl base64 -A > "$TAR.sig"
 
-# 自检：必须是单行 base64，且能被公钥验证通过
+# 自检：必须能被公钥验证通过
 base64 -d "$TAR.sig" > /tmp/tar.sig.der
-openssl dgst -sha256 -verify /path/to/cosign.pub -signature /tmp/tar.sig.der "$TAR"
+openssl dgst -sha256 -verify /root/github.com/teleport/teleport-signing.pub \
+  -signature /tmp/tar.sig.der "$TAR"
 ```
 
 最终每个版本需要三个对象：
@@ -148,27 +156,10 @@ teleport-v18.11.1-linux-amd64-bin.tar.gz.sig
 说明：
 
 - `.sha256` 文件内容可以是 `sha256sum` 的完整输出（`<hash>  <filename>`），代码只读取前 64 个字符；
-- `.sig` 是 `base64(ecdsa.SignASN1(privateKey, sha256(tarball)))`，必须是单行、无换行（`lib/autoupdate/agent/installer.go:449` 用 `base64.StdEncoding` 严格解码）；
-- 不要用 `> "$TAR.sig"` 直接重定向 cosign stdout：v2+ 输出的是 bundle JSON，v3 的 `--output-signature` 已废弃；
+- `.sig` 是 `base64(ecdsa.SignASN1(privateKey, sha256(tarball)))`，必须是单行、无换行（`lib/autoupdate/agent/installer.go:449` 用 `base64.StdEncoding` 严格解码），所以签名时必须用 `openssl base64 -A`；
 - 不开启签名校验时可以不传 `.sig`，但不建议在生产环境这样做。
 
-### 5.1 不用 cosign 的等价做法
-
-Teleport 只认「P-256 公钥 PEM + 对 sha256 的 ASN.1 DER 签名」，用 openssl 即可，不依赖 cosign 版本和密码交互：
-
-```bash
-# 一次性：生成与 cosign 等价的密钥对（无密码）
-openssl ecparam -name prime256v1 -genkey -noout -out cosign.key
-openssl ec -in cosign.key -pubout -out cosign.pub
-base64 -w0 cosign.pub > cosign.pub.b64   # 即 4.2 中的 $KEY
-
-# 每个版本：签名（-A 保证输出为单行）
-openssl dgst -sha256 -sign cosign.key "$TAR" | openssl base64 -A > "$TAR.sig"
-```
-
-注意：换密钥后必须用新公钥重新执行 4.2 编译 `teleport-update`，否则签名校验必然失败。
-
-以上步骤已封装为仓库根目录的 `sign-teleport-artifacts.sh`：
+批量签名时使用仓库根目录的 `sign-teleport-artifacts.sh`（换密钥后必须用新公钥重新执行 4.2 编译 `teleport-update`）：
 
 ```bash
 ./sign-teleport-artifacts.sh --keygen                 # 生成密钥对并签名全部产物
