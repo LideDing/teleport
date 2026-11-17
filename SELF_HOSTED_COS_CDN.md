@@ -62,7 +62,11 @@ make TELEPORT_UPDATE_DEV_BUILD=1 \
 
 ### 4.2 用自建公钥构建 teleport-update
 
-不能使用 `TELEPORT_UPDATE_DEV_BUILD=1` 的产物：它没有内置公钥，运行时所有命令都会失败。必须显式注入公钥：
+不能使用 `TELEPORT_UPDATE_DEV_BUILD=1` 的产物：它没有内置公钥，运行时所有命令都会失败。必须显式注入公钥。
+
+> 注意：Makefile 里的 `TELEPORT_UPDATE_ARTIFACT_SIGNATURE_PUBLIC_KEY_B64` 注入块只在
+> `GITHUB_REPOSITORY_OWNER=gravitational` 时生效（`Makefile:405`），本地直接 `make` 会静默产出空公钥的 updater，
+> 表现为 `teleport-update artifact signature public key is not configured`。请用下面的 go build：
 
 ```bash
 cd /root/github.com/teleport
@@ -122,8 +126,15 @@ TAR=teleport-v18.11.1-linux-amd64-bin.tar.gz
 # 校验和：前 64 字节必须是十六进制 SHA-256
 sha256sum "$TAR" > "$TAR.sha256"
 
-# 分离签名：base64 编码的 ECDSA 签名
-cosign sign-blob --yes --key /path/to/cosign.key --b64-signature "$TAR" > "$TAR.sig"
+# 分离签名（cosign v3）：--output-signature 已废弃，必须用 --bundle
+# --tlog-upload=false：Teleport 只校验签名本身，不需要上传 Rekor
+cosign sign-blob --yes --key /path/to/cosign.key \
+  --bundle /tmp/tar.bundle.json --tlog-upload=false "$TAR"
+jq -r '.messageSignature.signature' /tmp/tar.bundle.json > "$TAR.sig"
+
+# 自检：必须是单行 base64，且能被公钥验证通过
+base64 -d "$TAR.sig" > /tmp/tar.sig.der
+openssl dgst -sha256 -verify /path/to/cosign.pub -signature /tmp/tar.sig.der "$TAR"
 ```
 
 最终每个版本需要三个对象：
@@ -137,8 +148,34 @@ teleport-v18.11.1-linux-amd64-bin.tar.gz.sig
 说明：
 
 - `.sha256` 文件内容可以是 `sha256sum` 的完整输出（`<hash>  <filename>`），代码只读取前 64 个字符；
-- `.sig` 是 `base64(ecdsa.SignASN1(privateKey, sha256(tarball)))`，使用 `cosign sign-blob --b64-signature` 生成即可；
+- `.sig` 是 `base64(ecdsa.SignASN1(privateKey, sha256(tarball)))`，必须是单行、无换行（`lib/autoupdate/agent/installer.go:449` 用 `base64.StdEncoding` 严格解码）；
+- 不要用 `> "$TAR.sig"` 直接重定向 cosign stdout：v2+ 输出的是 bundle JSON，v3 的 `--output-signature` 已废弃；
 - 不开启签名校验时可以不传 `.sig`，但不建议在生产环境这样做。
+
+### 5.1 不用 cosign 的等价做法
+
+Teleport 只认「P-256 公钥 PEM + 对 sha256 的 ASN.1 DER 签名」，用 openssl 即可，不依赖 cosign 版本和密码交互：
+
+```bash
+# 一次性：生成与 cosign 等价的密钥对（无密码）
+openssl ecparam -name prime256v1 -genkey -noout -out cosign.key
+openssl ec -in cosign.key -pubout -out cosign.pub
+base64 -w0 cosign.pub > cosign.pub.b64   # 即 4.2 中的 $KEY
+
+# 每个版本：签名（-A 保证输出为单行）
+openssl dgst -sha256 -sign cosign.key "$TAR" | openssl base64 -A > "$TAR.sig"
+```
+
+注意：换密钥后必须用新公钥重新执行 4.2 编译 `teleport-update`，否则签名校验必然失败。
+
+以上步骤已封装为仓库根目录的 `sign-teleport-artifacts.sh`：
+
+```bash
+./sign-teleport-artifacts.sh --keygen                 # 生成密钥对并签名全部产物
+TELEPORT_SIGN_PASS=xxx ./sign-teleport-artifacts.sh   # 用加密私钥重新签名
+```
+
+脚本会对每个 `teleport-v*-bin.tar.gz` 生成 `.sha256` 和单行 `.sig`，并立即用公钥自检。
 
 ## 6. 上传到 COS
 
