@@ -1,0 +1,7 @@
+# 每行: <host> [labels]
+# labels 会作为 node 标签写进 teleport.yaml，用于 RBAC 和 tsh 选择
+10.0.4.10   env=prod,role=web
+10.0.4.11   env=prod,role=web
+10.0.4.12   env=prod,role=db
+# 也支持主机名
+# web-01.internal env=staging,role=web

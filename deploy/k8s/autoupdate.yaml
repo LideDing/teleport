@@ -1,0 +1,24 @@
+# 让 Proxy 生成 teleport-update 版安装脚本（带 --base-url <COS>）
+# 应用: ./deploy.sh autoupdate
+kind: autoupdate_version
+metadata:
+  name: autoupdate-version
+spec:
+  agents:
+    start_version: 18.11.1
+    target_version: 18.11.1
+    schedule: regular
+    mode: enabled
+---
+kind: autoupdate_config
+metadata:
+  name: autoupdate-config
+spec:
+  agents:
+    mode: enabled
+    strategy: halt-on-error
+    schedules:
+      regular:
+        - name: default
+          days: ["Mon", "Tue", "Wed", "Thu"]
+          start_hour: 16

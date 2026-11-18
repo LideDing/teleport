@@ -1,0 +1,63 @@
+# Teleport 超级管理员角色：所有资源读写 + 服务器 root 登录 + K8s cluster-admin
+# 应用: ./deploy.sh rbac [用户名]
+kind: role
+version: v8
+metadata:
+  name: super-admin
+  description: Super admin - all resources, root logins, kubernetes system:masters
+spec:
+  options:
+    max_session_ttl: 12h
+    forward_agent: true
+    port_forwarding: true
+    ssh_file_copy: true
+    create_host_user: false
+  allow:
+    # 服务器登录：显式给 root，同时保留用户自身的 logins traits
+    logins:
+      - root
+      - "{{internal.logins}}"
+    node_labels:
+      "*": ["*"]
+    app_labels:
+      "*": ["*"]
+    db_labels:
+      "*": ["*"]
+    db_names: ["*"]
+    db_users: ["*"]
+    # K8s：system:masters = cluster-admin，kubeconfig 里直接是超级权限
+    kubernetes_labels:
+      "*": ["*"]
+    kubernetes_groups:
+      - system:masters
+    kubernetes_users:
+      - "{{internal.kubernetes_users}}"
+    kubernetes_resources:
+      - kind: "*"
+        api_group: "*"
+        namespace: "*"
+        name: "*"
+        verbs: ["*"]
+    # 云资源与桌面（这几个字段不接受裸 "*"，必须用 ARN/资源 ID 形式的通配）
+    aws_role_arns:
+      - "arn:aws:iam::*:role/*"
+    azure_identities:
+      - "/subscriptions/*/resourcegroups/*/providers/Microsoft.ManagedIdentity/userAssignedIdentities/*"
+    gcp_service_accounts:
+      - "*@*.iam.gserviceaccount.com"
+    windows_desktop_labels:
+      "*": ["*"]
+    windows_desktop_logins:
+      - "*"
+      - "{{internal.windows_logins}}"
+    # 受管服务器上给用户创建的附加组（root 登录时一般用不到，保留通配）
+    host_groups: ["*"]
+    # 所有 Teleport 资源（user/role/token/server/...）全部权限
+    rules:
+      - resources: ["*"]
+        verbs: ["*"]
+    # 允许以任意用户/角色身份模拟（等价于内置 admin 的最高权限）
+    impersonate:
+      users: ["*"]
+      roles: ["*"]
+  deny: {}
