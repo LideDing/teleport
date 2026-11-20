@@ -239,6 +239,10 @@ kubectl -n teleport exec deploy/teleport-auth -- tctl get autoupdate_agent_rollo
 
 `deploy.sh autoupdate` 已经内置了这一步。
 
+> 旧版脚本会无视 `TELEPORT_CDN_BASE_URL`，直接从 `cdn.teleport.dev` 或官方 apt/yum 源装**官方二进制**。
+> 提交 `6f6cf8ce532` 起，AGPL 构建即使没有 rollout 也只返回 teleport-update 版脚本（`lib/web/scripts.go`），
+> 不再回退；之前构建的镜像（如 TKE 上的 `v18.11.1-agpl`）仍需按上面的方法处理。
+
 ### 5.2 `tctl tokens add --labels` 不会进安装脚本
 
 它只设置 token 的 `metadata.labels`；安装脚本读的是 **`spec.suggested_labels`**。
