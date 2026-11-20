@@ -1,6 +1,7 @@
 # 自编译 Teleport + 腾讯云 COS 自建 CDN 部署手册
 
 > 快速上手（Server + Linux + K8s + Web App）：见 `TELEPORT_SELFHOSTED_QUICKSTART.md`。
+> 单机部署（systemd + 本机 NGINX 分发 agent 二进制）：见 `SELF_HOSTED_LOCAL_NGINX.md`。
 > 适用版本：Teleport v18.11.1，Linux amd64/arm64，OSS（社区源码）自编译部署。
 > 目标：Proxy、Agent、客户端工具（tsh/tctl）全部从腾讯云 COS 下载 Teleport 二进制，不再访问 `cdn.teleport.dev`。
 
