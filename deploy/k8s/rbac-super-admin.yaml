@@ -47,8 +47,9 @@ spec:
       - "*@*.iam.gserviceaccount.com"
     windows_desktop_labels:
       "*": ["*"]
+    # Windows 登录名按字符串精确匹配，不支持 "*"，用 Administrator 作为最高权限账号
     windows_desktop_logins:
-      - "*"
+      - Administrator
       - "{{internal.windows_logins}}"
     # 受管服务器上给用户创建的附加组（root 登录时一般用不到，保留通配）
     host_groups: ["*"]
