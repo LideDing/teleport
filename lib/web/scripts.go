@@ -111,6 +111,12 @@ func (h *Handler) installScriptOptions(ctx context.Context) (scripts.InstallScri
 		autoupdateStyle = scripts.UpdaterBinaryAutoupdate
 	case automaticUpgrades(h.clusterFeatures):
 		autoupdateStyle = scripts.PackageManagerAutoupdate
+	case modules.GetModules().BuildType() == modules.BuildOSS:
+		// AGPL builds may only install binaries from the CDN set in TELEPORT_CDN_BASE_URL
+		// (see getCDNBaseURL), and only the teleport-update based scripts honor it.
+		// The legacy scripts download from cdn.teleport.dev and the official package
+		// repositories, so they must not be served even when there is no rollout.
+		autoupdateStyle = scripts.UpdaterBinaryAutoupdate
 	default:
 		autoupdateStyle = scripts.NoAutoupdate
 	}

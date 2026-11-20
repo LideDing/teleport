@@ -58,6 +58,7 @@ import (
 	libui "github.com/gravitational/teleport/lib/ui"
 	utils "github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/teleport/lib/utils/log/logtest"
+	"github.com/gravitational/teleport/lib/web/scripts"
 	"github.com/gravitational/teleport/lib/web/ui"
 )
 
@@ -2200,6 +2201,26 @@ func TestJoinScript(t *testing.T) {
 			require.NoError(t, err)
 			require.Contains(t, script, "UPDATER_STYLE='binary'")
 			require.Contains(t, script, fmt.Sprintf("TELEPORT_VERSION='%s'", testRollout.Spec.TargetVersion))
+		})
+		t.Run("AGPL build without rollout installs from the custom CDN", func(t *testing.T) {
+			const cdn = "https://cdn.example.com"
+			t.Setenv(EnvVarCDNBaseURL, cdn)
+			h := newAutoupdateTestHandler(t, autoupdateTestHandlerConfig{
+				testModules: &modulestest.Modules{TestBuildType: modules.BuildOSS},
+				token:       token,
+			})
+			script, err := h.getJoinScript(context.Background(), scriptSettings{token: validToken})
+			require.NoError(t, err)
+			require.Contains(t, script, "UPDATER_STYLE='binary'")
+			require.Contains(t, script, fmt.Sprintf("TELEPORT_VERSION='%s'", teleport.Version))
+
+			opts, err := h.installScriptOptions(context.Background())
+			require.NoError(t, err)
+			installScript, err := scripts.GetInstallScript(context.Background(), opts)
+			require.NoError(t, err)
+			require.Contains(t, installScript, "cdnBaseURL='"+cdn+"'")
+			require.Contains(t, installScript, "--base-url "+cdn)
+			require.NotContains(t, installScript, "cdn.teleport.dev")
 		})
 	})
 }
