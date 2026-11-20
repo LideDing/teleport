@@ -1,9 +1,10 @@
-# 自编译 Teleport 单机部署手册（systemd + 本机 NGINX 分发 agent 二进制）
+# 单机部署手册（systemd + 本机 NGINX 分发 agent 二进制）
 
+> 场景：单机部署，Teleport 控制面运行在一台 Linux 机器上。K8s 部署（控制面运行在 TKE）是另一个独立场景，见 `deploy/k8s/README.md`；两者的对比见 `deploy/README.md`。
 > 适用版本：Teleport v18.11.1 OSS（AGPL）源码，分支 `docs/selfhosted-cos-cdn`，Linux amd64。
 > 部署形态：一台机器同时运行 Teleport（auth + proxy + ssh，由 systemd 管理）和 NGINX。agent 安装、更新时从本机 NGINX 的 8443 端口下载自编译、自签名的二进制，不访问 `cdn.teleport.dev`。
 > 文中的域名、IP、路径都是本机当前部署的实际值（见附录），换机器时替换即可。
-> 相关文档：用腾讯云 COS 分发见 `SELF_HOSTED_COS_CDN.md`；TKE 部署踩坑见 `deploy/DEPLOYMENT_NOTES.md`。
+> 同一场景改用腾讯云 COS 分发，或者接入 K8s 集群、Web App，见同目录的 `QUICKSTART_COS.md`；下载地址和签名机制的原理见仓库根目录的 `SELF_HOSTED_COS_CDN.md`。
 
 ## 部署流程速览
 
@@ -295,7 +296,7 @@ tr '\0' '\n' < /proc/$(systemctl show -p MainPID --value teleport)/environ | gre
 
 ```bash
 cd /root/github.com/teleport
-tctl create -f deploy/k8s/rbac-super-admin.yaml      # 创建或覆盖 super-admin 角色
+tctl create -f deploy/single-host/rbac-super-admin.yaml   # 创建或覆盖 super-admin 角色
 tctl users add lideding --roles=super-admin,editor,access,auditor --logins=root
 ```
 
@@ -309,7 +310,7 @@ tctl users add lideding --roles=super-admin,editor,access,auditor --logins=root
 
 ### 6.2 权限说明
 
-`super-admin` 角色定义在 `deploy/k8s/rbac-super-admin.yaml`：
+`super-admin` 角色定义在 `deploy/single-host/rbac-super-admin.yaml`：
 
 | 范围 | 授权 |
 | --- | --- |
@@ -375,7 +376,25 @@ echo "curl -fsSL https://teleport.devcloud.oitcep.com/scripts/$TOKEN/install-nod
 
 在 agent 机器上执行打印出来的命令。也可以在 Web UI 的 Enroll New Resource → Linux Server 里生成同样的命令。
 
-要给节点打标签，需要用 YAML 创建带 `spec.suggested_labels` 的 token：`tctl tokens add --labels` 只给 token 本身打标签，不会进入安装脚本。写法见 `deploy/DEPLOYMENT_NOTES.md` 5.2。
+要给节点打标签，需要用 YAML 创建带 `spec.suggested_labels` 的 token。`tctl tokens add --labels` 只给 token 本身打标签，不会进入安装脚本。
+
+```bash
+TOKEN=$(openssl rand -hex 16)      # 安装脚本要求 token 是 32 位十六进制
+tctl create <<EOF
+kind: token
+version: v2
+metadata:
+  name: $TOKEN
+  expires: $(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+spec:
+  roles: [Node]
+  join_method: token
+  suggested_labels:
+    env: [prod]
+    team: [ops]
+EOF
+echo "curl -fsSL https://teleport.devcloud.oitcep.com/scripts/$TOKEN/install-node.sh | sudo bash"
+```
 
 ### 8.2 安装过程
 
@@ -397,9 +416,6 @@ teleport-update status      # base_url 应为 https://teleport.devcloud.oitcep.c
 tctl nodes ls
 tail /var/log/nginx/access.log
 ```
-
-> `deploy/nodes/` 下的批量加入脚本是给 TKE 集群写的（默认地址指向 TKE 和 COS），没有在本部署上验证过，建议用上面的官方安装脚本。
-
 ## 9. 日常运维
 
 ### 9.1 服务管理与日志
@@ -435,7 +451,7 @@ tail /var/log/nginx/access.log
 4. 最后升级 agent（agent 的版本不能高于服务端，所以总是先升服务端）：
    - 新接入的 agent 会自动安装 Proxy 的新版本。
    - 已有的 agent 在没有配置托管更新时不会自动升级，在 agent 上执行 `sudo teleport-update update --now`。
-   - 想让 agent 按时间窗自动升级，可以创建 `autoupdate_version` 和 `autoupdate_config` 资源，示例见 `deploy/k8s/autoupdate.yaml` 和 `SELF_HOSTED_COS_CDN.md` 8.3。
+   - 想让 agent 按时间窗自动升级，把 `deploy/single-host/autoupdate.yaml` 里的版本号改成新版本，再执行 `tctl create -f deploy/single-host/autoupdate.yaml`。
 
 ### 9.3 修改 agent 下载地址
 

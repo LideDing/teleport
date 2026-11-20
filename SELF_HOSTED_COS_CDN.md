@@ -1,7 +1,6 @@
 # 自编译 Teleport + 腾讯云 COS 自建 CDN 部署手册
 
-> 快速上手（Server + Linux + K8s + Web App）：见 `TELEPORT_SELFHOSTED_QUICKSTART.md`。
-> 单机部署（systemd + 本机 NGINX 分发 agent 二进制）：见 `SELF_HOSTED_LOCAL_NGINX.md`。
+> 本文是两个部署场景共用的参考：下载地址与签名机制、编译和签名、用 COS 分发。按场景的部署指南见 `deploy/README.md`：K8s 部署在 `deploy/k8s/`（使用 COS 分发），单机部署在 `deploy/single-host/`。
 > 适用版本：Teleport v18.11.1，Linux amd64/arm64，OSS（社区源码）自编译部署。
 > 目标：Proxy、Agent、客户端工具（tsh/tctl）全部从腾讯云 COS 下载 Teleport 二进制，不再访问 `cdn.teleport.dev`。
 
@@ -207,7 +206,7 @@ sha256sum teleport-v18.11.1-linux-amd64-bin.tar.gz
 
 ## 7. 配置 Proxy
 
-默认 systemd 单元会加载 `/etc/default/teleport`（`examples/systemd/teleport.service`）。
+单机部署：默认 systemd 单元会加载 `/etc/default/teleport`（`examples/systemd/teleport.service`）。
 
 ```bash
 sudo tee -a /etc/default/teleport > /dev/null <<'EOF'
@@ -230,6 +229,8 @@ Environment=TELEPORT_CDN_BASE_URL=https://teleport-1250000000.cos.ap-guangzhou.m
 - 不设置时，OSS 构建的安装脚本会直接返回错误。
 
 > 该变量是进程级环境变量，修改后必须重启 Proxy；已生成的旧脚本需要从 Web UI 重新生成。
+
+K8s 部署：不涉及 systemd，在 `deploy/k8s/values.yaml` 的 `extraEnv` 里设置 `TELEPORT_CDN_BASE_URL`，然后在 `deploy/k8s` 下执行 `./deploy.sh install`。
 
 ## 8. 配置 Agent
 

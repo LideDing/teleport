@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 单机脚本：把一台 Linux 机器加入 Teleport（node 角色，托管更新）
+# 单台机器安装脚本：把一台 Linux 机器加入 K8s 部署的 Teleport 集群（node 角色，托管更新）
 # 适合通过 SecureCRT / JumpServer / 批量执行平台一次性下发到多台主机。
 #
 # 用法（目标机上以 root 执行）：

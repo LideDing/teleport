@@ -1,0 +1,25 @@
+# 单机部署（可选）：开启 agent 托管更新，agent 在 autoupdate_config 的时间窗内自动升级到 target_version
+# 版本号填 Proxy 当前版本（不带 v）。应用: tctl create -f deploy/single-host/autoupdate.yaml
+# 确认: tctl get autoupdate_agent_rollout（auth 每分钟同步一次）
+kind: autoupdate_version
+metadata:
+  name: autoupdate-version
+spec:
+  agents:
+    start_version: 18.11.1
+    target_version: 18.11.1
+    schedule: regular
+    mode: enabled
+---
+kind: autoupdate_config
+metadata:
+  name: autoupdate-config
+spec:
+  agents:
+    mode: enabled
+    strategy: halt-on-error
+    schedules:
+      regular:
+        - name: default
+          days: ["Mon", "Tue", "Wed", "Thu"]
+          start_hour: 16

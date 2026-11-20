@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VALUES="${VALUES:-$SCRIPT_DIR/../k8s/values.yaml}"
+VALUES="${VALUES:-$SCRIPT_DIR/../values.yaml}"
 INVENTORY=""
 TOKEN=""
 NEW_TOKEN=0

@@ -1,8 +1,9 @@
-# Teleport 自托管快速部署手册（Server + Linux 节点 + K8s + Web App）
+# 单机部署快速上手：COS 分发 + 接入 Linux 节点、K8s 集群和 Web App
 
+> 场景：单机部署，控制面运行在一台 Linux Server 上，agent 二进制放在腾讯云 COS。本机实际的单机部署（本机 NGINX 分发）见同目录的 `README.md`；控制面运行在 K8s 里的场景见 `deploy/k8s/README.md`。
 > 版本：Teleport v18.11.1（源码自编译 OSS 版）
-> 目标：一台 Linux Server 作为 Control Plane，接入其他 Linux 机器、一个 Kubernetes 集群，并代理一个 Web 应用。
-> 配套文档：`SELF_HOSTED_COS_CDN.md`（COS 自建 CDN 与产物签名的完整原理和排错）。
+> 目标：一台 Linux Server 作为 Control Plane，接入其他 Linux 机器、一个 Kubernetes 集群，并代理一个 Web 应用。第 5 节的 K8s 集群是作为资源接入的，控制面不在 K8s 里。
+> 配套文档：仓库根目录的 `SELF_HOSTED_COS_CDN.md`（COS 自建 CDN 与产物签名的完整原理和排错）。
 
 ## 0. 部署拓扑与变量
 

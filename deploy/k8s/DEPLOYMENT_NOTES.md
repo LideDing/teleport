@@ -1,13 +1,15 @@
-# 自建 Teleport 部署踩坑记录（v18.11.1 + COS + TKE）
+# K8s 部署踩坑记录（TKE + COS，v18.11.1）
 
 > 环境：TKE 集群 `cls-g8ta0gnm`（ap-singapore）、官方 chart `teleport-cluster 18.11.1`、
 > 自编译 OSS 镜像 `v18.11.1-agpl`、腾讯云 COS 作为二进制分发源、cert-manager + DNSPod 签发证书。
 >
+> 本文属于 K8s 部署场景。单机部署是另一个独立场景，见 `deploy/single-host/README.md`。
+>
 > 配套文件：
 > - `deploy/k8s/` — Helm values、部署脚本、RBAC、autoupdate 资源
-> - `deploy/nodes/` — 节点批量加入脚本（SSH 批量 / 单机自包含）
+> - `deploy/k8s/nodes/` — 节点批量加入脚本（SSH 批量 / 单台机器安装脚本）
 >
-> 本文只记录**踩过的坑**和结论，完整步骤见 `SELF_HOSTED_COS_CDN.md`。
+> 本文只记录**踩过的坑**和结论。部署步骤见 `deploy/k8s/README.md`，编译、签名与 COS 分发见 `SELF_HOSTED_COS_CDN.md`。
 
 ---
 
@@ -302,7 +304,7 @@ C=/etc/teleport.yaml
 systemctl restart teleport
 ```
 
-（`deploy/nodes/teleport-agent.sh relabel` 就是这段逻辑。）
+（`deploy/k8s/nodes/teleport-agent.sh relabel` 就是这段逻辑。）
 
 ---
 
@@ -336,9 +338,9 @@ cd deploy/k8s && ./deploy.sh install
 ./deploy.sh rbac <user>
 
 # 批量装节点（需要能从本机 SSH 到目标机）
-cd deploy/nodes && ./join-nodes.sh -f inventory.txt --new-token -c 10
+cd deploy/k8s/nodes && ./join-nodes.sh -f inventory.txt --new-token -c 10
 
-# 单机脚本（适合批量执行平台下发）
+# 单台机器安装脚本（适合批量执行平台下发）
 bash teleport-agent.sh install --token=<token>
 ```
 
