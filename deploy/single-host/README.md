@@ -16,6 +16,7 @@
 | 4 | 创建超级管理员 | 第 6 节 |
 | 5 | 验证服务和下载链路 | 第 7 节 |
 | 6 | 接入 agent | 第 8 节 |
+| 7 | 配置证书自动续期 | 第 9.4 节 |
 
 ## 1. 架构与端口
 
@@ -44,7 +45,7 @@ teleport-update 下载二进制  ──8443─▶    NGINX（/var/www/teleport-c
 
 - 系统：TencentOS Server 4，root 用户。
 - DNS：`teleport.devcloud.oitcep.com` 和 `*.teleport.devcloud.oitcep.com` 都解析到本机（通配记录供 App Access 使用）。
-- 证书：已用 certbot 签发主域名 + 通配符证书（ECDSA，DNS-01，certbot-tcc 插件），位于 `/etc/letsencrypt/live/teleport.devcloud.oitcep.com/`。Teleport 和 NGINX 共用这一张证书。
+- 证书：已用 certbot 签发主域名 + 通配符证书（ECDSA，DNS-01，certbot-tcc 插件），位于 `/etc/letsencrypt/live/teleport.devcloud.oitcep.com/`。Teleport 和 NGINX 共用这一张证书，签发命令和自动续期见 9.4。
 - 网络：agent 机器能访问本机的 443 和 8443。云上安全组需要放行；本机 firewalld 未启用。
 - agent 机器：有 systemd 和 curl，glibc ≥ 2.38（本机编出的 `teleport` 依赖 `GLIBC_2.38`），例如 TencentOS 4、Ubuntu 24.04。
 - 编译环境：见 3.1。
@@ -212,7 +213,7 @@ EOF
 chmod 755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 ```
 
-续期本身目前还没有自动化，见 9.4。
+定时续期见 9.4。
 
 ## 5. 部署 Teleport 服务
 
@@ -464,30 +465,102 @@ tail /var/log/nginx/access.log
    sudo teleport-update enable --base-url "$NEW_URL"
    ```
 
-### 9.4 证书续期
+### 9.4 证书自动续期
 
-现状（2026-11-20）：
+证书由 certbot 通过 DNS-01 签发：certbot-tcc 插件调用 DNSPod API，临时写入 `_acme-challenge` TXT 记录。Teleport 和 NGINX 共用这张证书。续期由 systemd 定时器完成：
 
-- 证书 2027-02-18 到期。Teleport 每小时重新读取证书，NGINX 由 4.3 的钩子在续期后重载，两边都不需要手动重启。
-- **续期目前没有自动化**：系统的 `certbot-renew.timer` 没启用，而且系统的 `/usr/bin/certbot` 没有 tcc 插件。带插件的是 pyenv 里的 `/root/.pyenv/versions/3.12.16/bin/certbot`。
-- `/etc/letsencrypt/renewal/teleport.devcloud.oitcep.com.conf` 里写的是 `certbot_tcc_credentials = credentials.ini`，是相对路径（签发时在 `/root/work/nginx-files-server/tls/` 下执行），在别的目录执行 renew 会找不到凭据。
-- 凭据文件 `/root/work/nginx-files-server/tls/credentials.ini` 当前权限是 644，里面是云 API 密钥，应改为 600。
+| 组件 | 作用 |
+| --- | --- |
+| `teleport-cert-renew.timer` | 每天两次、在随机时间触发（certbot 推荐的频率，随机时间避免集中请求 Let's Encrypt）；关机错过的，开机后补跑 |
+| `teleport-cert-renew.service` | 执行 `certbot renew --cert-name teleport.devcloud.oitcep.com`。证书用掉约 2/3 有效期（90 天证书即到期前约 30 天）或 Let's Encrypt 通过 ARI 建议续期时才真正续期，其余时候只检查 |
+| `/etc/letsencrypt/renewal/teleport.devcloud.oitcep.com.conf` | certbot 记录的续期参数（插件、凭据路径、账号、密钥类型），每次续期沿用 |
+| `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh` | 续期成功后重载 NGINX（见 4.3） |
 
-建议按下面的方式配置（尚未在本机执行）：
+Teleport 每小时重新读取证书文件（`https_keypairs_reload_interval: 1h`），不需要重启；某次读取失败时继续用旧证书，下个周期再试。
+
+需要注意：
+
+- **续期用的是 pyenv 里装了 certbot-tcc 插件的 certbot**，即 `/root/.pyenv/versions/3.12.16/bin/certbot`。root 交互 shell 里的 `certbot` 就是它；systemd 里没有 pyenv 的环境，所以 service 里写绝对路径，pyenv 升级 Python 后要同步修改。系统自带的 `/usr/bin/certbot` 没有这个插件，**不要启用系统自带的 `certbot-renew.timer`**。
+- **凭据必须写绝对路径**。certbot 把签发时的 `--certbot-tcc-credentials` 原样记进续期配置，插件按当前目录解析相对路径；定时任务的工作目录是 `/`，相对路径会报 `未找到凭证文件 'credentials.ini'`。本机最初签发时用的就是相对路径，已用 `certbot reconfigure` 改成绝对路径（见下文“修改续期参数”）。
+- 插件优先读取环境变量 `TENCENTCLOUD_SECRET_ID`、`TENCENTCLOUD_SECRET_KEY`，没有时才读凭据文件。在设置了这两个变量的 shell 里演练成功，不代表定时任务也能成功，所以下面用 `systemd-run` 演练。
+- `--cert-name` 让定时任务只处理这一张证书，`/etc/letsencrypt/renewal/` 下其他证书的配置（包括已失效的）不会影响它。
+
+**签发证书（一次性）**：凭据写绝对路径。文件里是云 API 密钥，权限设为 600，否则 certbot 每次都会警告 `Unsafe permissions on credentials configuration file`。
 
 ```bash
 chmod 600 /root/work/nginx-files-server/tls/credentials.ini
-
-# 凭据改成绝对路径
-sed -i 's#^certbot_tcc_credentials = credentials.ini$#certbot_tcc_credentials = /root/work/nginx-files-server/tls/credentials.ini#' \
-  /etc/letsencrypt/renewal/teleport.devcloud.oitcep.com.conf
-
-# 演练：使用 Let's Encrypt 测试环境，会临时写入 DNS TXT 记录
-/root/.pyenv/versions/3.12.16/bin/certbot renew --dry-run
-
-# 每天检查一次，临近到期时才会真正续期
-echo '17 3 * * * root /root/.pyenv/versions/3.12.16/bin/certbot renew --quiet' > /etc/cron.d/certbot-renew-tcc
+certbot certonly --authenticator certbot-tcc \
+  --certbot-tcc-credentials /root/work/nginx-files-server/tls/credentials.ini \
+  -d teleport.devcloud.oitcep.com -d '*.teleport.devcloud.oitcep.com'
 ```
+
+**安装定时任务**：
+
+```bash
+cat > /etc/systemd/system/teleport-cert-renew.service <<'EOF'
+# 续期 teleport.devcloud.oitcep.com 证书（Teleport 与 NGINX 共用），由 teleport-cert-renew.timer 触发。
+# 用 pyenv 里装了 certbot-tcc 插件的 certbot（系统自带的 /usr/bin/certbot 没有该插件），pyenv 升级 Python 后要同步修改路径。
+# 定时器已经随机延迟，--no-random-sleep-on-renew 关掉 certbot 自己的随机等待。
+# 续期成功后，/etc/letsencrypt/renewal-hooks/deploy/ 下的钩子会重载 NGINX。
+[Unit]
+Description=Renew the teleport.devcloud.oitcep.com certificate (certbot, DNS-01 via certbot-tcc)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/.pyenv/versions/3.12.16/bin/certbot renew --cert-name teleport.devcloud.oitcep.com --no-random-sleep-on-renew
+EOF
+
+cat > /etc/systemd/system/teleport-cert-renew.timer <<'EOF'
+# 每天两次、在随机时间检查证书，certbot 只在临近到期时才真正续期；关机错过的，开机后补跑。
+[Unit]
+Description=Twice-daily renewal check for the teleport.devcloud.oitcep.com certificate
+
+[Timer]
+OnCalendar=*-*-* 00/12:00:00
+RandomizedDelaySec=12h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now teleport-cert-renew.timer
+systemctl list-timers teleport-cert-renew.timer
+```
+
+**演练**：用 `systemd-run` 在和定时任务相同的环境（工作目录 `/`，没有 shell 的环境变量和 pyenv）里，对 Let's Encrypt 测试环境走一遍完整续期，不影响正在使用的证书。会临时写入两条 `_acme-challenge` TXT 记录，结束后自动删除；`--run-deploy-hooks` 同时验证重载 NGINX 的钩子。
+
+```bash
+systemd-run --wait --pipe --collect \
+  /root/.pyenv/versions/3.12.16/bin/certbot renew --cert-name teleport.devcloud.oitcep.com \
+  --no-random-sleep-on-renew --dry-run --run-deploy-hooks
+```
+
+输出 `Congratulations, all simulated renewals succeeded` 即为成功。
+
+**修改续期参数**（例如换凭据路径）：用 `certbot reconfigure`，不要直接编辑续期配置。它会先在测试环境演练一次，成功后才保存：
+
+```bash
+certbot reconfigure --cert-name teleport.devcloud.oitcep.com \
+  --certbot-tcc-credentials /root/work/nginx-files-server/tls/credentials.ini
+grep certbot_tcc_credentials /etc/letsencrypt/renewal/teleport.devcloud.oitcep.com.conf
+```
+
+**日常检查**：
+
+| 操作 | 命令 |
+| --- | --- |
+| 下次运行时间 | `systemctl list-timers teleport-cert-renew.timer` |
+| 最近一次结果 | `systemctl status teleport-cert-renew.service`、`journalctl -u teleport-cert-renew.service -n 50` |
+| certbot 详细日志 | `/var/log/letsencrypt/letsencrypt.log` |
+| 立即检查一次（没到期不会续期） | `systemctl start teleport-cert-renew.service` |
+| 证书到期时间 | `certbot certificates --cert-name teleport.devcloud.oitcep.com` |
+| 强制续期 | `certbot renew --cert-name teleport.devcloud.oitcep.com --force-renewal`（Let's Encrypt 对同一组域名每 7 天最多签发 5 张，不要频繁执行） |
+
+Let's Encrypt 已不再发送到期提醒邮件，续期失败不会有人通知，要定期看一下最近一次结果。
 
 ### 9.5 备份与回滚
 
@@ -527,6 +600,8 @@ systemctl start teleport
 | `make build-archive` 报 `mkdir: cannot create directory ... File exists` | 仓库根目录有上次打包残留的 `teleport/` 目录 | 删掉这个目录后重试 |
 | 编译日志开头大量 `/bin/bash: - : invalid option` | Makefile 解析阶段的噪音 | 无害，忽略 |
 | tctl 报 `https private key does not exist: ...` | `teleport.yaml` 引用的证书文件不存在（例如换域名后没改路径） | 修正 `https_keypairs` 里的路径 |
+| 证书续期报 `未找到凭证文件 'credentials.ini'` | 续期配置里的凭据是相对路径，定时任务在 `/` 下运行找不到 | 按 9.4 用 `certbot reconfigure` 改成绝对路径 |
+| 证书续期报 `The requested certbot-tcc plugin does not appear to be installed` | 用的 certbot 没装插件：启用了系统自带的 `certbot-renew.timer`，或 pyenv 升级后 service 里的路径失效 | 只用 `teleport-cert-renew.timer`；修正 service 里的 certbot 路径后 `systemctl daemon-reload` |
 
 ## 11. 安全注意事项
 
@@ -535,9 +610,9 @@ systemctl start teleport
 - `super-admin` 相当于集群的 root，还能模拟任意用户，只授予确实需要的人；保持 OTP 二次验证开启。
 - 邀请链接和 join token 都是凭据，不要发到公开渠道；用完或过期的 token 用 `tctl tokens ls`、`tctl tokens rm` 清理。
 - NGINX 只读（仅 GET/HEAD）、不开目录列表，下载目录里只放发布产物。
-- certbot 的云 API 凭据文件权限应为 600（见 9.4）。
+- certbot 的云 API 凭据文件 `credentials.ini` 保持 600 权限（见 9.4）。
 
-## 附录：本机当前部署（2026-11-20）
+## 附录：本机当前部署（2026-11-21）
 
 | 项 | 值 |
 | --- | --- |
@@ -546,7 +621,7 @@ systemctl start teleport
 | 配置 | `/etc/teleport.yaml`、`/etc/default/teleport`、`/etc/systemd/system/teleport.service` |
 | 数据与日志 | `/var/lib/teleport`、`/var/log/teleport.log` |
 | NGINX | `/etc/nginx/conf.d/teleport-cdn.conf`，下载目录 `/var/www/teleport-cdn`，原 `nginx.conf` 备份为 `/etc/nginx/nginx.conf.orig` |
-| 续期钩子 | `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh` |
+| 证书续期 | 定时器 `teleport-cert-renew.timer`（每天两次）；续期配置 `/etc/letsencrypt/renewal/teleport.devcloud.oitcep.com.conf`；钩子 `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh`；DNS API 凭据 `/root/work/nginx-files-server/tls/credentials.ini`（600） |
 | 签名密钥 | 仓库根目录 `teleport-signing.key`、`.pub`、`.pub.b64` |
 | 用户 | `admin`（editor、access、auditor）；`lideding`（super-admin、editor、access、auditor） |
 | 旧部署备份 | `/var/lib/teleport.bak-20261120211409`、`/usr/local/lib/teleport-bak-20261120211409`、`/etc/teleport.yaml.bak-20261120211409` |
